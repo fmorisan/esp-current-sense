@@ -33,9 +33,24 @@ uv run --with pyserial python tools/serialpeek.py
 
 ## Current phase
 
-Phase 1 — blink firmware (`firmware/firmware.ino`). Onboard LED is on **GPIO2**
-(defined as `LED_BUILTIN` in the sketch). See the roadmap at the bottom for
-what comes next.
+Phase 2 — WiFi + HTTP (`firmware/firmware.ino`).
+
+- Joins WiFi from `firmware/secrets.h` (copy from `secrets.h.example`, gitignored).
+- LED: fast blink = joining, **steady on = ready**, off = lost connection (retries every 10 s).
+- `GET /` — tiny index page; `GET /metrics` — JSON:
+
+```sh
+curl http://192.168.0.158/metrics
+# {"current_a":0.000,"power_va":0.0,"voltage":230.0,
+#  "wifi_rssi_dbm":-53,"heap_free":221640,"uptime_s":14,"source":"placeholder"}
+```
+
+`current_a`/`power_va` are placeholders until the CT frontend (phase 3).
+The board also answers on `http://esp-current-sense.local/` **if** your
+router doesn't block multicast — this LAN does (mDNS verified dead), so give
+the board a **DHCP reservation** on the router and use the IP.
+
+Phase 1 (blink) is history — see git log.
 
 ---
 
@@ -160,7 +175,7 @@ native HA auto-discovery.
 ## Roadmap
 
 1. **[done]** Blink + serial hello
-2. WiFi connect + `/metrics` HTTP endpoint (verify end-to-end from a laptop)
+2. **[done]** WiFi connect + `/metrics` HTTP endpoint
 3. CT frontend on GPIO34, ADC sampling + RMS current, kettle calibration
 4. MQTT + HA discovery → energy dashboard (power VA → W at PF≈1)
 5. OTA firmware updates, calibration constant in NVS

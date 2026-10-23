@@ -3,3 +3,4 @@
 *.eep
 *.elf
 *.bin.map
+firmware/secrets.h
