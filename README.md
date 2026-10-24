@@ -12,7 +12,10 @@ on the mains, reporting to Home Assistant over the LAN.
 Already installed on this Mac:
 
 - `arduino-cli` (brew) with `esp32:esp32` core 3.3.12
+- `PubSubClient` 2.8 Arduino library (MQTT)
+- `mosquitto` (brew) — test broker + `mosquitto_sub`/`mosquitto_pub` clients
 - `esptool` (brew) for low-level flash work
+- `uv` — runs the python helpers in `tools/` with zero-setup venvs
 
 ## Commands
 
@@ -33,24 +36,50 @@ uv run --with pyserial python tools/serialpeek.py
 
 ## Current phase
 
-Phase 2 — WiFi + HTTP (`firmware/firmware.ino`).
+Phase 4 — CT sampling + HTTP + MQTT with HA discovery.
 
 - Joins WiFi from `firmware/secrets.h` (copy from `secrets.h.example`, gitignored).
 - LED: fast blink = joining, **steady on = ready**, off = lost connection (retries every 10 s).
-- `GET /` — tiny index page; `GET /metrics` — JSON:
+- `GET /metrics` — JSON:
 
 ```sh
 curl http://192.168.0.158/metrics
-# {"current_a":0.000,"power_va":0.0,"voltage":230.0,
-#  "wifi_rssi_dbm":-53,"heap_free":221640,"uptime_s":14,"source":"placeholder"}
+# {"current_a":0.000,"power_va":0.0,"voltage":230.0,"energy_kwh":0.0000,
+#  "vrms_mv":0.0,"win_ms":216,"windows":40,"wifi_rssi_dbm":-65,
+#  "heap_free":211464,"uptime_s":30,"source":"adc"}
 ```
 
-`current_a`/`power_va` are placeholders until the CT frontend (phase 3).
+`current_a`/`power_va`/`energy_kwh` read ~0 until the CT bias divider is
+wired to GPIO34 (phase 3 code is live; values go real the moment it is).
+
 The board also answers on `http://esp-current-sense.local/` **if** your
 router doesn't block multicast — this LAN does (mDNS verified dead), so give
 the board a **DHCP reservation** on the router and use the IP.
 
-Phase 1 (blink) is history — see git log.
+### MQTT
+
+Runs against a **local test broker** on this Mac for now
+(`MQTT_HOST=192.168.0.226` in secrets.h):
+
+```sh
+/opt/homebrew/opt/mosquitto/sbin/mosquitto -c tools/mosquitto-test.conf  # start
+/opt/homebrew/bin/mosquitto_sub -h localhost -t '#' -v -W 30             # watch
+pkill mosquitto                                                          # stop
+```
+
+Topics (all under the hostname):
+
+| Topic | Payload |
+|---|---|
+| `esp-current-sense/state` | JSON, every 5 s (same as /metrics) |
+| `esp-current-sense/availability` | `online`/`offline`, retained + LWT |
+| `homeassistant/sensor/esp-current-sense/{current,power,energy}/config` | HA discovery, retained |
+
+**Going production** (when ready): install the Mosquitto broker add-on on the
+HA box, create an MQTT user, then in `firmware/secrets.h` set `MQTT_HOST` to
+the HA box IP and fill `MQTT_USER`/`MQTT_PASS` — `make dev`. Entities appear
+in HA automatically (Settings → Devices & services → MQTT). Give the board a
+DHCP reservation. Until then, the HA entities would track the test broker.
 
 ---
 
@@ -185,7 +214,9 @@ native HA auto-discovery.
 
 1. **[done]** Blink + serial hello
 2. **[done]** WiFi connect + `/metrics` HTTP endpoint
-3. CT frontend on GPIO34, ADC sampling + RMS current, kettle calibration
-4. MQTT + HA discovery → energy dashboard (power VA → W at PF≈1)
+3. **[done, pending clamp]** CT frontend on GPIO34, ADC sampling + RMS current
+   — code live; kettle calibration once the clamp is wired
+4. **[done on test broker]** MQTT + HA discovery — repoint secrets.h at the
+   HA broker when Mosquitto is installed there
 5. OTA firmware updates, calibration constant in NVS
 6. Optional: ZMPT101B voltage sensing (true power), multi-CT circuits

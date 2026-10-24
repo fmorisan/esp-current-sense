@@ -1,21 +1,21 @@
 // esp-current-sense — NodeMCU-32S (ESP32-D0WD-V3)
 //
-// Phase 3: CT sampling on GPIO34 (ADC1_CH6) + RMS current over WiFi/HTTP.
+// Phase 4: CT sampling + HTTP /metrics + MQTT with Home Assistant discovery.
 //
 //   LED status:
 //     fast blink — joining WiFi
 //     steady on  — ready, HTTP server up
 //     off        — WiFi lost (retries every 10 s)
 //
-//   Endpoints:
-//     GET /         tiny index page (handy from a phone browser)
-//     GET /metrics  JSON readings from the CT frontend
+//   HTTP:      GET / and /metrics (same JSON as the MQTT state topic)
+//   MQTT out:  esp-current-sense/state            JSON every ~5 s
+//              esp-current-sense/availability     online/offline (retained, LWT)
+//              homeassistant/sensor/…/config      HA discovery (retained)
 //
 //   Until the clamp's bias divider is wired to GPIO34, the pin floats and
-//   /metrics shows small noise values — that's expected, not a fault.
+//   readings show ~0 A — that's expected, not a fault.
 //
 // Roadmap (see README.md):
-//   4. MQTT + Home Assistant discovery
 //   5. OTA updates, calibration constants in NVS
 
 #include <Arduino.h>
@@ -24,6 +24,7 @@
 #include <WiFi.h>
 
 #include "ct_sensor.h"
+#include "mqtt.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -41,6 +42,7 @@ static const uint32_t kReconnectCheckMs = 10000;    // WiFi retry interval
 static const uint32_t kConnectTimeoutMs = 15000;
 static const uint32_t kDebugPrintMs = 3000;         // serial status cadence
 static const uint32_t kSampleBurstMs = 20;          // per-loop sampling budget
+static const uint32_t kMqttPublishMs = 5000;        // state publish cadence
 static const float kAssumedMainsVoltage = 230.0f;   // until real voltage sensing (phase 6)
 
 static WebServer server(80);
@@ -49,20 +51,30 @@ static bool ledState = false;
 static uint32_t lastBlinkToggle = 0;
 static uint32_t lastReconnectAttempt = 0;
 static uint32_t lastDebugPrint = 0;
+static uint32_t lastMqttPublish = 0;
+static bool haveLastAccum = false;
+static uint32_t lastAccumMs = 0;
+static double energyWh = 0.0;  // apparent-energy integral since boot
 
 static void setLed(bool on) { digitalWrite(LED_BUILTIN, on ? HIGH : LOW); }
 
-static void handleMetrics() {
-  char buf[320];
-  snprintf(buf, sizeof(buf),
+// One JSON payload shared by HTTP /metrics and the MQTT state topic so HA
+// value_templates and any curl debugging always agree.
+static void buildMetricsJson(char* buf, size_t len) {
+  snprintf(buf, len,
            "{\"current_a\":%.3f,\"power_va\":%.1f,\"voltage\":%.1f,"
-           "\"vrms_mv\":%.1f,\"win_ms\":%lu,\"windows\":%u,"
+           "\"energy_kwh\":%.4f,\"vrms_mv\":%.1f,\"win_ms\":%lu,\"windows\":%u,"
            "\"wifi_rssi_dbm\":%d,\"heap_free\":%u,\"uptime_s\":%lu,"
            "\"source\":\"adc\"}",
            ct::currentA(), ct::powerVa(kAssumedMainsVoltage), kAssumedMainsVoltage,
-           ct::vrmsMillivolts(), (unsigned long)ct::windowMs,
+           energyWh / 1000.0, ct::vrmsMillivolts(), (unsigned long)ct::windowMs,
            (unsigned)ct::windowsDone, (int)WiFi.RSSI(),
            (unsigned)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
+}
+
+static void handleMetrics() {
+  char buf[320];
+  buildMetricsJson(buf, sizeof(buf));
   server.send(200, "application/json", buf);
 }
 
@@ -109,9 +121,10 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(kSerialBaud);
   delay(200);
-  Serial.println("\r\n[esp-current-sense] boot — phase 3 (CT sampling)");
+  Serial.println("\r\n[esp-current-sense] boot — phase 4 (CT + HTTP + MQTT)");
 
   ct::setup();
+  mqtt::setup();
   connectWifi();
 
   server.on("/", HTTP_GET, handleRoot);
@@ -124,6 +137,23 @@ void setup() {
 void loop() {
   server.handleClient();
   ct::burst(kSampleBurstMs);
+  mqtt::loop();
+
+  // Integrate apparent power over time -> Wh (resets at boot; HA treats
+  // total_increasing drops as a meter reset, so that's safe).
+  const uint32_t now = millis();
+  if (haveLastAccum) {
+    energyWh += ct::powerVa(kAssumedMainsVoltage) * (now - lastAccumMs) / 3600000.0;
+  }
+  lastAccumMs = now;
+  haveLastAccum = true;
+
+  if (now - lastMqttPublish >= kMqttPublishMs) {
+    lastMqttPublish = now;
+    char buf[320];
+    buildMetricsJson(buf, sizeof(buf));
+    mqtt::publishState(buf);
+  }
 
   if (wifiReady && WiFi.status() != WL_CONNECTED) {
     Serial.println("[wifi] connection lost");
