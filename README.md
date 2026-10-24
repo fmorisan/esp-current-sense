@@ -105,6 +105,16 @@ is needed.
 
 ### Circuit
 
+**Interactive schematic** — open this link in a browser to see and simulate
+the frontend (live scope on the GPIO34 node showing the 50 Hz waveform riding
+on the 1.65 V bias, modelled at the full 100 A swing):
+
+<[https://pfalstad.github.io/circuitjs1/circuitjs.html?ctz=DwYwlgTgBAZgvAIgMwEYFQC4GdEFYCmAtAGzpgiIAMAdLuiAEZ6XoBuEe6ADkwri1AC22RCiIBOBAD5grKAA9ESAExQVa1eNJQA7vAQDBAQ3msl1JOgD0MnQqWr1AFnUrrMgOb3km4hqgoygAc7sAANgB23sqUQf4xcSGY%2BEoAapZQNsDQigjKTpTxBQGB6BwIKJRVAlk5iPmFKIFQDQHiymWi1TWe0cUo7S3FyvmhdrmtTapOTnFToXK5WiW%2BLbHoeqLoMOX86MamotROKE6hdQjLU0ONpVDlMaGR3lfNxE4r6BgpCADCACqYMBcUJeJZ%2BBJQZYNUIgbxIJB%2Ba4IpHteiiIh0TK9XIotqOREtUbY0DeAq3aZVfHoipEADsoLJVIGlMKIzOJOeuRmc2auGa82SiAA4gAFACSAHkkB8ABQAQQAIr8UAB9X4ACWIAEpQpKybMVlAeQEZtstlAsBQDKEAPZQfARUTaLBcBzmvLcKjoXJiqUy6TALhQMw2y3Wjokqy2mRWcAQKRAA>](https://pfalstad.github.io/circuitjs1/circuitjs.html?ctz=DwYwlgTgBAZgvAIgMwEYFQC4GdEFYCmAtAGzpgiIAMAdLuiAEZ6XoBuEe6ADkwri1AC22RCiIBOBAD5grKAA9ESAExQVa1eNJQA7vAQDBAQ3msl1JOgD0MnQqWr1AFnUrrMgOb3km4hqgoygAc7sAANgB23sqUQf4xcSGY%2BEoAapZQNsDQigjKTpTxBQGB6BwIKJRVAlk5iPmFKIFQDQHiymWi1TWe0cUo7S3FyvmhdrmtTapOTnFToXK5WiW%2BLbHoeqLoMOX86MamotROKE6hdQjLU0ONpVDlMaGR3lfNxE4r6BgpCADCACqYMBcUJeJZ%2BBJQZYNUIgbxIJB%2Ba4IpHteiiIh0TK9XIotqOREtUbY0DeAq3aZVfHoipEADsoLJVIGlMKIzOJOeuRmc2auGa82SiAA4gAFACSAHkkB8ABQAQQAIr8UAB9X4ACWIAEpQpKybMVlAeQEZtstlAsBQDKEAPZQfARUTaLBcBzmvLcKjoXJiqUy6TALhQMw2y3Wjokqy2mRWcAQKRAA)
+
+Also saved as `docs/ct-frontend.circuitjs` (CircuitJS1 XML — File → Import in
+the simulator) and `docs/ct-frontend.url`. Regenerate both with
+`uv run --with lzstring python tools/gen_ct_schematic.py`.
+
 ```
  3V3 ──[ 10k ]──┬──[ 10k ]── GND
                 │
