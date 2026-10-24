@@ -118,18 +118,24 @@ the simulator) and `docs/ct-frontend.url`. Regenerate both with
 ```
  3V3 ──[ 10k ]──┬──[ 10k ]── GND
                 │
-                ├──══╪══ 10 µF electrolytic (– to GND)   (bias stabiliser)
-                │
-                ├── 100 nF ceramic to GND (optional, HF decoupling)
+                ├──══╪══ 10 µF (– to GND)   (bias stabiliser)
+                ├── 100 nF to GND (optional, HF decoupling)
                 │
                 └──────────► GPIO34  (ADC1_CH6)
 
- CT tip   ──────┘ (signal into the bias node)
+ CT tip ────────┘
  CT sleeve ──── GND
 ```
 
-Parts: 2 × 10 kΩ (matched pair, 1% if possible), 1 × 10 µF electrolytic,
-optionally 1 × 100 nF ceramic.
+**Bias sanity check (telemetry shows it):** firmware prints
+`[ct] bias=…mV` — it should sit ≈ 1600–1700 mV with the clamp idle. If it
+sags to a few hundred mV, something DC-conductive is loading the node:
+first suspect the divider wiring (both 10k present? top to 3V3, bottom to
+GND, midpoint to the node?); if the divider is verified correct, the
+clamp's internal burden is providing a DC path tip→sleeve→GND, and the fix
+is a series coupling cap (10–100 µF, electrolytic **+ toward the node**)
+between CT tip and the node — it blocks the DC path while passing 50 Hz
+untouched (highpass corner 1/(2π·5kΩ·Cs) ≈ 3 Hz @ 10 µF).
 
 At 100 A the waveform spans 1.65 V ± 1.414 V (≈ 0.24–3.07 V) — inside the
 11 dB-attenuation ADC range. Typical household loads (5–40 A) sit right in

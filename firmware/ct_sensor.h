@@ -28,6 +28,7 @@ static size_t windowsDone = 0;
 
 static float vrmsMv = 0.0f;
 static float rmsCurrentA = 0.0f;
+static float biasMv = 0.0f;
 
 inline void setup() {
   analogReadResolution(12);
@@ -40,7 +41,7 @@ static void finalize() {
   // Pass 1: DC bias = mean of the window (self-calibrating midpoint).
   int64_t sum = 0;
   for (size_t i = 0; i < count; ++i) sum += samples[i];
-  const float biasMv = (float)((double)sum / (double)count);
+  const float biasMvInstant = (float)((double)sum / (double)count);
 
   // Pass 2: RMS around the measured bias.
   double sq = 0.0;
@@ -50,6 +51,7 @@ static void finalize() {
   }
   vrmsMv = (float)sqrt(sq / (double)count);
   rmsCurrentA = vrmsMv / 1000.0f * kAmpsPerVolt;
+  biasMv = biasMv * 0.5f + (float)biasMvInstant * 0.5f;  // smoothed for telemetry
   windowMs = elapsedUs / 1000;
   ++windowsDone;
   count = 0;  // restart window
@@ -68,6 +70,7 @@ inline void burst(uint32_t burstMs = 20) {
 
 inline float currentA() { return rmsCurrentA; }
 inline float vrmsMillivolts() { return vrmsMv; }
+inline float biasMillivolts() { return biasMv; }
 inline float powerVa(float assumedMainsVoltage) { return rmsCurrentA * assumedMainsVoltage; }
 
 }  // namespace ct

@@ -26,7 +26,7 @@ ELEMENTS = [
     ("g", {"x": "240 192 240 224"}),                              # divider gnd
     ("w", {"x": "240 112 448 112"}),                              # ADC node bus
     ("v", {"x": "96 112 96 208", "wf": "1", "fr": "50", "maxv": "1.414"}),  # CT @100A
-    ("r", {"x": "96 112 240 112", "r": "20"}),                    # internal burden
+    ("r", {"x": "96 112 240 112", "r": "20"}),                    # internal burden (AC model)
     ("ln", {"x": "96 112 64 112", "te": "CT tip"}),               # tip label
     ("g", {"x": "96 208 96 240"}),                                # sleeve gnd
     ("c", {"x": "336 112 336 192", "c": "1e-5"}),                 # C1 10uF bias cap
