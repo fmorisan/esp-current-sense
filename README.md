@@ -61,9 +61,18 @@ Phase 1 (blink) is history — see git log.
 The 100A/1V variant is a **voltage-output** CT: the burden resistor is inside
 the clamp and it outputs **1 V RMS AC at 100 A** through the primary
 (~500 mV RMS at 50 A, linear with current). So **no external burden resistor**
-is needed. What *is* needed is a DC bias, because the ESP32 ADC reads 0–3.3 V
-only and cannot see the negative half of the AC waveform. We bias the signal
-at the ADC mid-rail (1.65 V) so the AC swings symmetrically around it.
+is needed.
+
+> ⚠️ **"Built-in sampling resistor" ≠ no extra parts.** The burden converts
+> current to voltage, but the output is still a 0-centred AC waveform. The
+> ESP32 ADC only reads 0–3.1 V and its protection diodes clamp negative
+> swings — you'd lose the whole negative half-cycle (wrong readings) and
+> stress the pin at higher loads. The **bias divider below is mandatory**:
+> it lifts the waveform to mid-rail so it fits the ADC window.
+>
+> Multimeter check before wiring: DC V range tip↔sleeve should read ~0.00 V
+> (proves AC-centred output); AC V range should read load-proportional
+> millivolts (~100 mV RMS per 10 A of house load).
 
 ### Circuit
 

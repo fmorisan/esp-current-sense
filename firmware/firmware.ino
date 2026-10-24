@@ -1,6 +1,6 @@
 // esp-current-sense — NodeMCU-32S (ESP32-D0WD-V3)
 //
-// Phase 2: WiFi + HTTP /metrics endpoint.
+// Phase 3: CT sampling on GPIO34 (ADC1_CH6) + RMS current over WiFi/HTTP.
 //
 //   LED status:
 //     fast blink — joining WiFi
@@ -9,13 +9,12 @@
 //
 //   Endpoints:
 //     GET /         tiny index page (handy from a phone browser)
-//     GET /metrics  JSON readings (current values are placeholders until
-//                   the CT frontend lands in phase 3)
+//     GET /metrics  JSON readings from the CT frontend
 //
-//   Find it at:  http://<ip>/metrics  or  http://esp-current-sense.local/metrics
+//   Until the clamp's bias divider is wired to GPIO34, the pin floats and
+//   /metrics shows small noise values — that's expected, not a fault.
 //
 // Roadmap (see README.md):
-//   3. CT sampling on GPIO34 (ADC1_CH6) + RMS current
 //   4. MQTT + Home Assistant discovery
 //   5. OTA updates, calibration constants in NVS
 
@@ -23,6 +22,8 @@
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <WiFi.h>
+
+#include "ct_sensor.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -38,6 +39,8 @@ static const uint32_t kSerialBaud = 115200;
 static const uint32_t kConnectBlinkMs = 100;        // fast blink while joining
 static const uint32_t kReconnectCheckMs = 10000;    // WiFi retry interval
 static const uint32_t kConnectTimeoutMs = 15000;
+static const uint32_t kDebugPrintMs = 3000;         // serial status cadence
+static const uint32_t kSampleBurstMs = 20;          // per-loop sampling budget
 static const float kAssumedMainsVoltage = 230.0f;   // until real voltage sensing (phase 6)
 
 static WebServer server(80);
@@ -45,20 +48,20 @@ static bool wifiReady = false;
 static bool ledState = false;
 static uint32_t lastBlinkToggle = 0;
 static uint32_t lastReconnectAttempt = 0;
+static uint32_t lastDebugPrint = 0;
 
 static void setLed(bool on) { digitalWrite(LED_BUILTIN, on ? HIGH : LOW); }
 
 static void handleMetrics() {
-  // Placeholder readings until phase 3 wires up the CT on GPIO34.
-  const float currentA = 0.0f;
-  const float powerVa = currentA * kAssumedMainsVoltage;
-
-  char buf[256];
+  char buf[320];
   snprintf(buf, sizeof(buf),
            "{\"current_a\":%.3f,\"power_va\":%.1f,\"voltage\":%.1f,"
+           "\"vrms_mv\":%.1f,\"win_ms\":%lu,\"windows\":%u,"
            "\"wifi_rssi_dbm\":%d,\"heap_free\":%u,\"uptime_s\":%lu,"
-           "\"source\":\"placeholder\"}",
-           currentA, powerVa, kAssumedMainsVoltage, (int)WiFi.RSSI(),
+           "\"source\":\"adc\"}",
+           ct::currentA(), ct::powerVa(kAssumedMainsVoltage), kAssumedMainsVoltage,
+           ct::vrmsMillivolts(), (unsigned long)ct::windowMs,
+           (unsigned)ct::windowsDone, (int)WiFi.RSSI(),
            (unsigned)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
   server.send(200, "application/json", buf);
 }
@@ -67,7 +70,6 @@ static void handleRoot() {
   server.send(200, "text/html",
               "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>"
               "<body><h3>esp-current-sense</h3>"
-              "<p>energy monitor &mdash; CT not wired yet (placeholder data)</p>"
               "<p><a href=\"/metrics\">/metrics (JSON)</a></p></body></html>");
 }
 
@@ -107,8 +109,9 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(kSerialBaud);
   delay(200);
-  Serial.println("\r\n[esp-current-sense] boot — phase 2 (wifi + http)");
+  Serial.println("\r\n[esp-current-sense] boot — phase 3 (CT sampling)");
 
+  ct::setup();
   connectWifi();
 
   server.on("/", HTTP_GET, handleRoot);
@@ -120,6 +123,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  ct::burst(kSampleBurstMs);
 
   if (wifiReady && WiFi.status() != WL_CONNECTED) {
     Serial.println("[wifi] connection lost");
@@ -132,5 +136,13 @@ void loop() {
     WiFi.disconnect();
     connectWifi();
   }
-  delay(2);
+
+  if (millis() - lastDebugPrint >= kDebugPrintMs) {
+    lastDebugPrint = millis();
+    Serial.printf("[ct] win=%lums  vrms=%.1fmV  I=%.2fA  (windows=%u)\r\n",
+                  (unsigned long)ct::windowMs, ct::vrmsMillivolts(),
+                  ct::currentA(), (unsigned)ct::windowsDone);
+  }
+
+  delay(1);
 }
