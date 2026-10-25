@@ -169,9 +169,12 @@ void loop() {
 
   if (millis() - lastDebugPrint >= kDebugPrintMs) {
     lastDebugPrint = millis();
-    Serial.printf("[ct] win=%lums  bias=%.0fmV  vrms=%.1fmV  I=%.2fA  (windows=%u)\r\n",
+    Serial.printf("[ct] win=%lums  bias=%.0fmV  vrms=%.1fmV  I=%.2fA  min=%d max=%d  xings=%u (~%.0fHz)  (windows=%u)\r\n",
                   (unsigned long)ct::windowMs, ct::biasMillivolts(), ct::vrmsMillivolts(),
-                  ct::currentA(), (unsigned)ct::windowsDone);
+                  ct::currentA(), ct::minMillivolts(), ct::maxMillivolts(),
+                  ct::zeroCrossings(),
+                  ct::windowMs > 0 ? (float)ct::zeroCrossings() / 2.0f * (1000.0f / (float)ct::windowMs) : 0.0f,
+                  (unsigned)ct::windowsDone);
   }
 
   delay(1);
