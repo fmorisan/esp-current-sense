@@ -58,13 +58,16 @@ the board a **DHCP reservation** on the router and use the IP.
 
 ### MQTT
 
-Runs against a **local test broker** on this Mac for now
-(`MQTT_HOST=192.168.0.226` in secrets.h):
+Publishes to the **homelab broker at `192.168.0.18:1883`** (anonymous allowed;
+add credentials in `secrets.h` via `MQTT_USER`/`MQTT_PASS` when you tighten it).
+Home Assistant runs on `192.168.0.22` (port **80**, HA Container install — no
+Supervisor/add-ons); its MQTT integration points at the homelab broker and
+the three entities auto-appeared under the "Home energy monitor" device.
+
+Watch the live feed from anywhere:
 
 ```sh
-/opt/homebrew/opt/mosquitto/sbin/mosquitto -c tools/mosquitto-test.conf  # start
-/opt/homebrew/bin/mosquitto_sub -h localhost -t '#' -v -W 30             # watch
-pkill mosquitto                                                          # stop
+/opt/homebrew/bin/mosquitto_sub -h 192.168.0.18 -t 'esp-current-sense/#' -v
 ```
 
 Topics (all under the hostname):
