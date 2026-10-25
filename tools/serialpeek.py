@@ -22,10 +22,15 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, default=6.0)
     args = parser.parse_args()
 
-    ser = serial.Serial(args.port, args.baud, timeout=0.5)
-    # Deassert handshake lines so the auto-reset circuit leaves the chip running.
+    ser = serial.Serial()
+    ser.port = args.port
+    ser.baudrate = args.baud
+    ser.timeout = 0.5
+    # Deassert handshake lines BEFORE open so the auto-reset circuit never
+    # sees a transition — opening the port then left the chip running.
     ser.dtr = False
     ser.rts = False
+    ser.open()
 
     deadline = time.time() + args.seconds
     while time.time() < deadline:

@@ -1,0 +1,10 @@
+<script>
+    setInterval(() => {
+        fetch("http://192.168.0.158/metrics").then(r => r.json()).then(data => {
+            kettle.innerHTML += `<p>${JSON.stringify(data)}</p>`
+        })
+    }, 1000)
+</script>
+
+<div id="kettle">
+</div>

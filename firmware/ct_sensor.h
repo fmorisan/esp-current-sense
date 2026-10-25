@@ -17,16 +17,18 @@
 namespace ct {
 
 static const uint8_t kPin = 34;            // ADC1_CH6 — input-only, safe with WiFi
-// Calibrated against a 2200 W kettle on 220 V mains (raw reading 8.94 A vs
-// 10.00 A expected). The ×1.12 absorbs the clamp's internal impedance
-// loading the 5 kΩ divider node plus clamp/element tolerance. ×1.02 more
-// compensates the digital 300 Hz low-pass below (-2 % gain at 60 Hz).
-static const float kAmpsPerVolt = 114.0f;
-static const float kNoiseFloorA = 0.35f;   // idle vrms ≈16–20 mV ≈ 1.8 A raw → gate below this
+// Calibrated against a 2200 W kettle on 220 V mains through the final
+// frontend (series 10 µF in the tip line): kettle displays 10.00 A with
+// k = 127 (raw vrms ~79 mV through the 300 Hz digital low-pass).
+// Residual accuracy ±15 % — refine against a utility meter or plug-in
+// power meter.
+static const float kAmpsPerVolt = 127.0f;
+// Idle junk floor measures ~12.5 mV RMS → ~1.6 A at k=127; gate above it.
+// The 100 nF ceramic at the pin will shrink junk and this gate together.
+static const float kNoiseFloorA = 2.0f;
 // Digital single-pole low-pass applied to samples before RMS: kills the
-// aliased RF/SMPS junk (±25 dB at ~5.5 kHz) that the SAR ADC demodulates
-// into our passband. alpha ≈ 1 - e^(-2π·fc/fs) for fc = 300 Hz, fs ≈ 20 kS/s.
-// Stand-in for the 100 nF ceramic at the pin until one is sourced.
+// aliased RF/SMPS junk the SAR ADC demodulates into our passband.
+// alpha ≈ 1 - e^(-2π·fc/fs), fc = 300 Hz, fs ≈ 20 kS/s.
 static const float kLpfAlpha = 0.090f;
 static const size_t kMaxSamples = 4096;    // ~0.5 s window at ESP32 ADC rates
 
@@ -58,10 +60,12 @@ static void finalize() {
   for (size_t i = 0; i < count; ++i) sum += samples[i];
   const float biasMvInstant = (float)((double)sum / (double)count);
 
-  // Pass 2: RMS around the measured bias.
+  // Pass 2: RMS around THIS window's measured bias (not the smoothed one —
+  // using the lagging EMA here inflates RMS whenever the signal centre moves,
+  // e.g. during clamp moves or big load steps).
   double sq = 0.0;
   for (size_t i = 0; i < count; ++i) {
-    const double d = (double)samples[i] - (double)biasMv;
+    const double d = (double)samples[i] - (double)biasMvInstant;
     sq += d * d;
   }
   vrmsMv = (float)sqrt(sq / (double)count);

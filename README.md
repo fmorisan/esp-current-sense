@@ -118,24 +118,23 @@ the simulator) and `docs/ct-frontend.url`. Regenerate both with
 ```
  3V3 ──[ 10k ]──┬──[ 10k ]── GND
                 │
-                ├──══╪══ 10 µF (– to GND)   (bias stabiliser)
-                ├── 100 nF to GND (optional, HF decoupling)
+                ├──► GPIO34  (ADC1_CH6)
                 │
-                └──────────► GPIO34  (ADC1_CH6)
-
- CT tip ────────┘
- CT sleeve ──── GND
+                └──[ 10 µF, + toward node ]──●── CT tip
+CT sleeve ──────────────────────────── GND   (● = node)
 ```
 
-**Bias sanity check (telemetry shows it):** firmware prints
-`[ct] bias=…mV` — it should sit ≈ 1600–1700 mV with the clamp idle. If it
-sags to a few hundred mV, something DC-conductive is loading the node:
-first suspect the divider wiring (both 10k present? top to 3V3, bottom to
-GND, midpoint to the node?); if the divider is verified correct, the
-clamp's internal burden is providing a DC path tip→sleeve→GND, and the fix
-is a series coupling cap (10–100 µF, electrolytic **+ toward the node**)
-between CT tip and the node — it blocks the DC path while passing 60 Hz
-untouched (highpass corner 1/(2π·5kΩ·Cs) ≈ 3 Hz @ 10 µF).
+> ⚠️ **The series coupling cap in the tip line is REQUIRED for this clamp —
+> verified empirically.** This SCT-013's internal burden is DC-conductive
+> tip→sleeve: connected straight to the divider node it drags the bias from
+> 1.65 V down to ~0.14 V (measured). The series cap blocks that DC path
+> while passing 60 Hz untouched (corner = 1/(2π·5kΩ·C) ≈ 3 Hz @ 10 µF).
+> Go/no-go check on serial: `bias≈1658mV` **with the clamp attached**.
+
+**Bias sanity check:** firmware prints `[ct] bias=…mV` — it must sit at
+≈ 1600–1700 mV **with the clamp connected**. Below ~1.5 V means something
+DC-conductive is loading the node; a perfectly flat line (min == max) means
+the ADC pin isn't connected to anything at all.
 
 At 100 A the waveform spans 1.65 V ± 1.414 V (≈ 0.24–3.07 V) — inside the
 11 dB-attenuation ADC range. Typical household loads (5–40 A) sit right in
@@ -180,12 +179,15 @@ burden built in).
 
 ### Calibration constant
 
-Firmware `kAmpsPerVolt = 112.0` (amps per volt RMS at the ADC, ×1.12 of the
-nameplate 100 A/1 V — the clamp's internal impedance loads the 5 kΩ divider
-node slightly). Calibrated against a 2200 W kettle on 220 V mains: raw
-reading 8.94 A vs 10.00 A expected. Residual accuracy ≈ ±10 %, dominated by
-actual mains voltage under load; trim once more against a reference (utility
-meter or plug-in power meter) if you need better.
+Firmware `kAmpsPerVolt = 127.0` — calibrated against a 2200 W kettle on
+220 V mains through the final frontend (series-cap tip line + 300 Hz digital
+low-pass): kettle displays 10.2 A, trimmed to nameplate 10.0 A. Residual
+accuracy ±15 %, dominated by element/mains tolerance — refine against a
+utility meter over a day or a plug-in power meter for better.
+
+Noise gate: `kNoiseFloorA = 2.0` — the un-shielded node picks up ~12 mV RMS
+of RF junk (~1.6 A equivalent); readings below 2 A report as 0. The 100 nF
+ceramic (node→GND, when sourced) shrinks that floor and this gate together.
 
 ---
 
@@ -234,8 +236,8 @@ native HA auto-discovery.
 
 1. **[done]** Blink + serial hello
 2. **[done]** WiFi connect + `/metrics` HTTP endpoint
-3. **[done, pending clamp]** CT frontend on GPIO34, ADC sampling + RMS current
-   — code live; kettle calibration once the clamp is wired
+3. **[done]** CT frontend on GPIO34 — series-coupled divider verified,
+   RMS sampling, kettle-calibrated to ±15 %, noise gate at 2 A
 4. **[done on test broker]** MQTT + HA discovery — repoint secrets.h at the
    HA broker when Mosquitto is installed there
 5. OTA firmware updates, calibration constant in NVS
