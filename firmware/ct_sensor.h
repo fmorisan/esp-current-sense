@@ -17,7 +17,11 @@
 namespace ct {
 
 static const uint8_t kPin = 34;            // ADC1_CH6 — input-only, safe with WiFi
-static const float kAmpsPerVolt = 100.0f;  // calibration: trim after kettle test
+// Calibrated against a 2200 W kettle on 220 V mains (raw reading 8.94 A vs
+// 10.00 A expected). The ×1.12 absorbs the clamp's internal impedance
+// loading the 5 kΩ divider node plus clamp/element tolerance.
+static const float kAmpsPerVolt = 112.0f;
+static const float kNoiseFloorA = 0.35f;   // idle vrms ≈16–20 mV ≈ 1.8 A raw → gate below this
 static const size_t kMaxSamples = 4096;    // ~0.5 s window at ESP32 ADC rates
 
 static int16_t samples[kMaxSamples];  // millivolts, calibrated
@@ -51,6 +55,7 @@ static void finalize() {
   }
   vrmsMv = (float)sqrt(sq / (double)count);
   rmsCurrentA = vrmsMv / 1000.0f * kAmpsPerVolt;
+  if (rmsCurrentA < kNoiseFloorA) rmsCurrentA = 0.0f;  // gate the ADC noise floor
   biasMv = biasMv * 0.5f + (float)biasMvInstant * 0.5f;  // smoothed for telemetry
   windowMs = elapsedUs / 1000;
   ++windowsDone;

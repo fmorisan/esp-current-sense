@@ -44,7 +44,7 @@ Phase 4 — CT sampling + HTTP + MQTT with HA discovery.
 
 ```sh
 curl http://192.168.0.158/metrics
-# {"current_a":0.000,"power_va":0.0,"voltage":230.0,"energy_kwh":0.0000,
+# {"current_a":0.000,"power_va":0.0,"voltage":220.0,"energy_kwh":0.0000,
 #  "vrms_mv":0.0,"win_ms":216,"windows":40,"wifi_rssi_dbm":-65,
 #  "heap_free":211464,"uptime_s":30,"source":"adc"}
 ```
@@ -106,7 +106,7 @@ is needed.
 ### Circuit
 
 **Interactive schematic** — open this link in a browser to see and simulate
-the frontend (live scope on the GPIO34 node showing the 50 Hz waveform riding
+the frontend (live scope on the GPIO34 node showing the 60 Hz waveform riding
 on the 1.65 V bias, modelled at the full 100 A swing):
 
 <[https://pfalstad.github.io/circuitjs1/circuitjs.html?ctz=DwYwlgTgBAZgvAIgMwEYFQC4GdEFYCmAtAGzpgiIAMAdLuiAEZ6XoBuEe6ADkwri1AC22RCiIBOBAD5grKAA9ESAExQVa1eNJQA7vAQDBAQ3msl1JOgD0MnQqWr1AFnUrrMgOb3km4hqgoygAc7sAANgB23sqUQf4xcSGY%2BEoAapZQNsDQigjKTpTxBQGB6BwIKJRVAlk5iPmFKIFQDQHiymWi1TWe0cUo7S3FyvmhdrmtTapOTnFToXK5WiW%2BLbHoeqLoMOX86MamotROKE6hdQjLU0ONpVDlMaGR3lfNxE4r6BgpCADCACqYMBcUJeJZ%2BBJQZYNUIgbxIJB%2Ba4IpHteiiIh0TK9XIotqOREtUbY0DeAq3aZVfHoipEADsoLJVIGlMKIzOJOeuRmc2auGa82SiAA4gAFACSAHkkB8ABQAQQAIr8UAB9X4ACWIAEpQpKybMVlAeQEZtstlAsBQDKEAPZQfARUTaLBcBzmvLcKjoXJiqUy6TALhQMw2y3Wjokqy2mRWcAQKRAA>](https://pfalstad.github.io/circuitjs1/circuitjs.html?ctz=DwYwlgTgBAZgvAIgMwEYFQC4GdEFYCmAtAGzpgiIAMAdLuiAEZ6XoBuEe6ADkwri1AC22RCiIBOBAD5grKAA9ESAExQVa1eNJQA7vAQDBAQ3msl1JOgD0MnQqWr1AFnUrrMgOb3km4hqgoygAc7sAANgB23sqUQf4xcSGY%2BEoAapZQNsDQigjKTpTxBQGB6BwIKJRVAlk5iPmFKIFQDQHiymWi1TWe0cUo7S3FyvmhdrmtTapOTnFToXK5WiW%2BLbHoeqLoMOX86MamotROKE6hdQjLU0ONpVDlMaGR3lfNxE4r6BgpCADCACqYMBcUJeJZ%2BBJQZYNUIgbxIJB%2Ba4IpHteiiIh0TK9XIotqOREtUbY0DeAq3aZVfHoipEADsoLJVIGlMKIzOJOeuRmc2auGa82SiAA4gAFACSAHkkB8ABQAQQAIr8UAB9X4ACWIAEpQpKybMVlAeQEZtstlAsBQDKEAPZQfARUTaLBcBzmvLcKjoXJiqUy6TALhQMw2y3Wjokqy2mRWcAQKRAA)
@@ -134,7 +134,7 @@ first suspect the divider wiring (both 10k present? top to 3V3, bottom to
 GND, midpoint to the node?); if the divider is verified correct, the
 clamp's internal burden is providing a DC path tip→sleeve→GND, and the fix
 is a series coupling cap (10–100 µF, electrolytic **+ toward the node**)
-between CT tip and the node — it blocks the DC path while passing 50 Hz
+between CT tip and the node — it blocks the DC path while passing 60 Hz
 untouched (highpass corner 1/(2π·5kΩ·Cs) ≈ 3 Hz @ 10 µF).
 
 At 100 A the waveform spans 1.65 V ± 1.414 V (≈ 0.24–3.07 V) — inside the
@@ -159,10 +159,10 @@ input-only, so it can't interfere with boot strapping.
 
 - ESP32 ADC is noticeably non-linear near 0 V and near full scale. Firmware
   will use the factory eFuse calibration + 11 dB attenuation + heavy
-  oversampling (sample ≥ 2 kHz, RMS over whole 50 Hz cycles) which is plenty
+  oversampling (sample ≥ 2 kHz, RMS over whole 60 Hz cycles) which is plenty
   for whole-home monitoring.
 - Current-only measurement gives **apparent power** (VA) assuming nominal
-  230 V and PF ≈ 1. Good enough for the HA energy dashboard; for true
+  220 V and PF ≈ 1. Good enough for the HA energy dashboard; for true
   power/kWh later, add a ZMPT101B mains-voltage input on another ADC1 pin
   and compute real power.
 - If precision matters later: an ADS1115 (I²C, 16-bit) replaces the noisy
@@ -180,8 +180,12 @@ burden built in).
 
 ### Calibration constant
 
-Firmware `ICAL = 100.0` (amps per volt RMS at the ADC). Verify against a
-known load: a 2 kW kettle ≈ 8.7 A @ 230 V. Trim the constant to match.
+Firmware `kAmpsPerVolt = 112.0` (amps per volt RMS at the ADC, ×1.12 of the
+nameplate 100 A/1 V — the clamp's internal impedance loads the 5 kΩ divider
+node slightly). Calibrated against a 2200 W kettle on 220 V mains: raw
+reading 8.94 A vs 10.00 A expected. Residual accuracy ≈ ±10 %, dominated by
+actual mains voltage under load; trim once more against a reference (utility
+meter or plug-in power meter) if you need better.
 
 ---
 
@@ -195,7 +199,7 @@ end state**.
 Firmware joins WiFi, serves JSON on `http://<ip>/metrics`:
 
 ```json
-{"current_a": 4.21, "power_va": 968.3, "voltage": 230.0, "uptime_s": 1203}
+{"current_a": 4.21, "power_va": 926.2, "voltage": 220.0, "uptime_s": 1203}
 ```
 
 HA can poll it with a `restful` sensor. Great for `curl` during development

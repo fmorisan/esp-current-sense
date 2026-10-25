@@ -43,7 +43,7 @@ static const uint32_t kConnectTimeoutMs = 15000;
 static const uint32_t kDebugPrintMs = 3000;         // serial status cadence
 static const uint32_t kSampleBurstMs = 20;          // per-loop sampling budget
 static const uint32_t kMqttPublishMs = 5000;        // state publish cadence
-static const float kAssumedMainsVoltage = 230.0f;   // until real voltage sensing (phase 6)
+static const float kAssumedMainsVoltage = 220.0f;   // until real voltage sensing (phase 6)
 
 static WebServer server(80);
 static bool wifiReady = false;
