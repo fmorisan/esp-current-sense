@@ -23,9 +23,10 @@ static const uint8_t kPin = 34;            // ADC1_CH6 — input-only, safe with
 // Residual accuracy ±15 % — refine against a utility meter or plug-in
 // power meter.
 static const float kAmpsPerVolt = 127.0f;
-// Idle junk floor measures ~12.5 mV RMS → ~1.6 A at k=127; gate above it.
-// The 100 nF ceramic at the pin will shrink junk and this gate together.
-static const float kNoiseFloorA = 2.0f;
+// Idle junk floor measures ~12–16 mV RMS (~1.6–2 A equivalent at k=127);
+// gate set to 1 A so cycling loads near idle stay visible. Will re-tighten
+// after the 100 nF ceramic lands and the floor shrinks.
+static const float kNoiseFloorA = 1.0f;
 // Digital single-pole low-pass applied to samples before RMS: kills the
 // aliased RF/SMPS junk the SAR ADC demodulates into our passband.
 // alpha ≈ 1 - e^(-2π·fc/fs), fc = 300 Hz, fs ≈ 20 kS/s.
