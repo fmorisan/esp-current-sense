@@ -1,10 +1,147 @@
-<script>
-    setInterval(() => {
-        fetch("http://192.168.0.158/metrics").then(r => r.json()).then(data => {
-            kettle.innerHTML += `<p>${JSON.stringify(data)}</p>`
-        })
-    }, 1000)
-</script>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>esp-current-sense — live</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0f1115; color:#e6e6e6;
+         font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; padding:20px; }
+  h1 { font-size:15px; font-weight:600; letter-spacing:.4px; color:#9aa4b2; margin:0 0 14px; }
+  h1 b { color:#e6e6e6; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px;
+           font-weight:600; letter-spacing:.5px; vertical-align:middle; margin-left:8px; }
+  .badge.mqtt  { background:#123524; color:#4ade80; border:1px solid #1d5c3a; }
+  .badge.http  { background:#372a12; color:#fbbf24; border:1px solid #5c4a1d; }
+  .badge.off   { background:#3a1215; color:#f87171; border:1px solid #5c1d20; }
+  .tiles { display:flex; gap:14px; flex-wrap:wrap; margin:0 0 14px; }
+  .tile { background:#171a21; border:1px solid #232833; border-radius:10px;
+          padding:12px 18px; min-width:150px; }
+  .tile .v { font-size:32px; font-weight:650; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .tile .v small { font-size:15px; font-weight:500; color:#9aa4b2; margin-left:4px; }
+  .tile .k { font-size:11px; letter-spacing:.8px; text-transform:uppercase; color:#6b7686; margin-top:2px; }
+  #chart { width:100%; height:60vh; min-height:340px; background:#171a21;
+           border:1px solid #232833; border-radius:10px; }
+  .hint { color:#6b7686; font-size:12px; margin-top:10px; }
+  code { color:#9aa4b2; background:#171a21; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+  <h1><b>esp-current-sense</b> — whole-home current <span id="src" class="badge off">CONNECTING</span></h1>
 
-<div id="kettle">
-</div>
+  <div class="tiles">
+    <div class="tile"><div class="v"><span id="v-current">—</span><small>A</small></div><div class="k">Current (RMS)</div></div>
+    <div class="tile"><div class="v"><span id="v-power">—</span><small>VA</small></div><div class="k">Apparent power</div></div>
+    <div class="tile"><div class="v"><span id="v-energy">—</span><small>kWh</small></div><div class="k">Energy since boot</div></div>
+    <div class="tile"><div class="v"><span id="v-rssi">—</span><small>dBm</small></div><div class="k">WiFi signal</div></div>
+  </div>
+
+  <div id="chart"></div>
+  <p class="hint">
+    source: <code>mqtt ws://192.168.0.18:8081</code> · topic: <code>esp-current-sense/#</code>
+    · window: last 30 min · scroll to zoom, drag to pan
+  </p>
+
+<script>
+(() => {
+  const WS_URL  = 'ws://192.168.0.18:8081';
+  const TOPIC_BASE = 'esp-current-sense/';
+  const WINDOW_MS = 30 * 60 * 1000;          // chart window
+  const STALE_MS  = 15 * 1000;               // no data for this long → OFFLINE
+
+  const $ = id => document.getElementById(id);
+  const srcBadge = $('src');
+  let source = null;                          // 'mqtt' | 'http' | null
+  let lastUpdate = 0;
+  let failStreak = 0;
+
+  // ---------- chart ----------
+  const points = [];                          // [[ms, amps], ...]
+  const chart = echarts.init($('chart'), null, { renderer: 'canvas' });
+  window.addEventListener('resize', () => chart.resize());
+  chart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    tooltip: { trigger: 'axis',
+               valueFormatter: v => (+v).toFixed(2) + ' A',
+               backgroundColor: '#171a21', borderColor: '#232833',
+               textStyle: { color: '#e6e6e6' } },
+    grid: { left: 54, right: 20, top: 24, bottom: 46 },
+    xAxis: { type: 'time', axisLine: { lineStyle: { color: '#2a3040' } },
+             axisLabel: { color: '#6b7686' }, splitLine: { show: false } },
+    yAxis: { type: 'value', min: 0, name: 'A',
+             nameTextStyle: { color: '#6b7686' },
+             axisLabel: { color: '#6b7686' },
+             splitLine: { lineStyle: { color: '#1c212b' } } },
+    dataZoom: [{ type: 'inside' }],
+    series: [{
+      name: 'current', type: 'line', smooth: true, showSymbol: false,
+      lineStyle: { color: '#38bdf8', width: 2 },
+      areaStyle: { color: {
+        type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+        colorStops: [{ offset: 0, color: 'rgba(56,189,248,.28)' },
+                     { offset: 1, color: 'rgba(56,189,248,0)' }] } },
+      data: []
+    }]
+  });
+
+  function push(ts, amps) {
+    points.push([ts, amps]);
+    const cutoff = ts - WINDOW_MS;
+    while (points.length && points[0][0] < cutoff) points.shift();
+    lastUpdate = ts;
+    chart.setOption({ series: [{ data: points }] });
+  }
+
+  function onData(d) {
+    if (!d || typeof d.current_a !== 'number') return;
+    $('v-current').textContent = d.current_a.toFixed(2);
+    $('v-power').textContent   = d.power_va.toFixed(0);
+    $('v-energy').textContent  = d.energy_kwh.toFixed(3);
+    if (typeof d.wifi_rssi_dbm === 'number') $('v-rssi').textContent = d.wifi_rssi_dbm;
+    push(Date.now(), d.current_a);
+    failStreak = 0;
+    setBadge(source || 'http');
+  }
+
+  function setBadge(kind) {
+    source = kind;
+    if (kind === 'mqtt') { srcBadge.textContent = 'LIVE · MQTT'; srcBadge.className = 'badge mqtt'; }
+    if (kind === 'off')  { srcBadge.textContent = 'OFFLINE';     srcBadge.className = 'badge off'; }
+  }
+
+  setInterval(() => {
+    if (lastUpdate && Date.now() - lastUpdate > STALE_MS) setBadge('off');
+  }, 3000);
+
+  // ---------- the source: MQTT over WebSockets ----------
+  function startMqtt() {
+    if (typeof mqtt === 'undefined') { setBadge('off'); return; }
+    const c = mqtt.connect(WS_URL, {
+      clientId: 'dashboard-' + Math.random().toString(16).slice(2, 8),
+      reconnectPeriod: 5000,              // auto-reconnect forever
+      connectTimeout: 5000,
+      keepalive: 20
+    });
+    c.on('connect', () => {
+      c.subscribe([TOPIC_BASE + 'state', TOPIC_BASE + 'availability']);
+      setBadge('mqtt');
+      source = 'mqtt';
+    });
+    c.on('message', (topic, payload) => {
+      const t = topic.slice(TOPIC_BASE.length);
+      if (t === 'state') onData(JSON.parse(payload.toString()));
+      if (t === 'availability' && payload.toString() !== 'online') setBadge('off');
+    });
+    c.on('error', () => {});
+  }
+
+  startMqtt();
+})();
+</script>
+</body>
+</html>
