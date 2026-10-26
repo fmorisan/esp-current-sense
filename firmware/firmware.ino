@@ -63,11 +63,13 @@ static void setLed(bool on) { digitalWrite(LED_BUILTIN, on ? HIGH : LOW); }
 static void buildMetricsJson(char* buf, size_t len) {
   snprintf(buf, len,
            "{\"current_a\":%.3f,\"power_va\":%.1f,\"voltage\":%.1f,"
-           "\"energy_kwh\":%.4f,\"vrms_mv\":%.1f,\"bias_mv\":%.0f,\"win_ms\":%lu,\"windows\":%u,"
+           "\"energy_kwh\":%.4f,\"vrms_mv\":%.1f,\"bias_mv\":%.0f,\"mains_hz\":%.1f,"
+           "\"win_ms\":%lu,\"windows\":%u,"
            "\"wifi_rssi_dbm\":%d,\"heap_free\":%u,\"uptime_s\":%lu,"
            "\"source\":\"adc\"}",
            ct::currentA(), ct::powerVa(kAssumedMainsVoltage), kAssumedMainsVoltage,
-           energyWh / 1000.0, ct::vrmsMillivolts(), ct::biasMillivolts(), (unsigned long)ct::windowMs,
+           energyWh / 1000.0, ct::vrmsMillivolts(), ct::biasMillivolts(),
+           ct::measuredMainsHz(), (unsigned long)ct::windowMs,
            (unsigned)ct::windowsDone, (int)WiFi.RSSI(),
            (unsigned)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
 }
@@ -169,11 +171,10 @@ void loop() {
 
   if (millis() - lastDebugPrint >= kDebugPrintMs) {
     lastDebugPrint = millis();
-    Serial.printf("[ct] win=%lums  bias=%.0fmV  vrms=%.1fmV  I=%.2fA  min=%d max=%d  xings=%u (~%.0fHz)  (windows=%u)\r\n",
+    Serial.printf("[ct] win=%lums  bias=%.0fmV  vrms=%.1fmV  I=%.2fA  min=%d max=%d  xings=%u  mains=%.1fHz  (windows=%u)\r\n",
                   (unsigned long)ct::windowMs, ct::biasMillivolts(), ct::vrmsMillivolts(),
                   ct::currentA(), ct::minMillivolts(), ct::maxMillivolts(),
-                  ct::zeroCrossings(),
-                  ct::windowMs > 0 ? (float)ct::zeroCrossings() / 2.0f * (1000.0f / (float)ct::windowMs) : 0.0f,
+                  ct::zeroCrossings(), ct::measuredMainsHz(),
                   (unsigned)ct::windowsDone);
   }
 

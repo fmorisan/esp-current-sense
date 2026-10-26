@@ -161,8 +161,10 @@ input-only, so it can't interfere with boot strapping.
 
 - ESP32 ADC is noticeably non-linear near 0 V and near full scale. Firmware
   will use the factory eFuse calibration + 11 dB attenuation + heavy
-  oversampling (sample ≥ 2 kHz, RMS over whole 60 Hz cycles) which is plenty
-  for whole-home monitoring.
+  oversampling (sample ≥ 2 kHz, RMS over whole mains cycles — the window is
+  closed on hysteresis-counted rising edges, so it always spans complete
+  half-cycles and self-adapts to 50 or 60 Hz) which is plenty for whole-home
+  monitoring.
 - Current-only measurement gives **apparent power** (VA) assuming nominal
   220 V and PF ≈ 1. Good enough for the HA energy dashboard; for true
   power/kWh later, add a ZMPT101B mains-voltage input on another ADC1 pin
@@ -182,15 +184,17 @@ burden built in).
 
 ### Calibration constant
 
-Firmware `kAmpsPerVolt = 127.0` — calibrated against a 2200 W kettle on
-220 V mains through the final frontend (series-cap tip line + 300 Hz digital
-low-pass): kettle displays 10.2 A, trimmed to nameplate 10.0 A. Residual
-accuracy ±15 %, dominated by element/mains tolerance — refine against a
-utility meter over a day or a plug-in power meter for better.
+Firmware `kAmpsPerVolt = 127.0` — calibrated against a 2200 W kettle on 220 V
+mains through the final frontend (series-cap tip line + 300 Hz digital
+low-pass): kettle displays 10.0–10.5 A against a nameplate 10.0 A. Residual
+accuracy ±3 %, dominated by element/mains tolerance (kettle power scales with
+V², and mains voltage drifts a few percent) — refine against a utility meter
+over a day or a plug-in power meter for better.
 
-Noise gate: `kNoiseFloorA = 2.0` — the un-shielded node picks up ~12 mV RMS
-of RF junk (~1.6 A equivalent); readings below 2 A report as 0. The 100 nF
-ceramic (node→GND, when sourced) shrinks that floor and this gate together.
+Noise gate: `kNoiseFloorA = 1.0` — the node's idle floor measures ~14 mV RMS
+(~1.8 A equivalent at k=127). That floor is the ESP32 SAR ADC's own conversion
+noise, not coupled RF: the 100 nF ceramic at the pin did **not** lower it, so
+the gate is what manages it. Readings below 1 A report as 0.
 
 ---
 
