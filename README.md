@@ -191,10 +191,12 @@ accuracy ±3 %, dominated by element/mains tolerance (kettle power scales with
 V², and mains voltage drifts a few percent) — refine against a utility meter
 over a day or a plug-in power meter for better.
 
-Noise gate: `kNoiseFloorA = 1.0` — the node's idle floor measures ~14 mV RMS
-(~1.8 A equivalent at k=127). That floor is the ESP32 SAR ADC's own conversion
+Noise gate: `kNoiseFloorA = 2.0` — the node's idle floor measures ~14–16 mV RMS
+(~1.8–2 A equivalent at k=127). That floor is the ESP32 SAR ADC's own conversion
 noise, not coupled RF: the 100 nF ceramic at the pin did **not** lower it, so
-the gate is what manages it. Readings below 1 A report as 0.
+the gate is what manages it. This clamp+ADC pair cannot resolve much below ~2 A;
+readings under 2 A report as 0. A 50 A/1 V clamp or an ADS1115 16-bit ADC would
+lower the floor and allow a tighter gate.
 
 ---
 

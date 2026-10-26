@@ -29,11 +29,11 @@ static const uint8_t kPin = 34;            // ADC1_CH6 — input-only, safe with
 // Residual accuracy ±15 % — refine against a utility meter or plug-in
 // power meter.
 static const float kAmpsPerVolt = 127.0f;
-// Idle junk floor measures ~12–16 mV RMS (~1.6–2 A equivalent at k=127);
-// gate set to 1 A so cycling loads near idle stay visible. The 100 nF ceramic
-// at the pin did not lower it — the floor is the SAR ADC's own conversion
-// noise, not coupled RF — so the gate is what manages it.
-static const float kNoiseFloorA = 1.0f;
+// Idle junk floor measures ~14–16 mV RMS (~1.8–2 A equivalent at k=127); this
+// clamp+ADC pair cannot resolve much below ~2 A, so the gate sits just above
+// the floor. Loads above ~2 A are unaffected. A 50 A/1 V clamp or an ADS1115
+// would lower the floor and let this gate come down.
+static const float kNoiseFloorA = 2.0f;
 // Digital single-pole low-pass applied to samples before RMS: kills the
 // aliased RF/SMPS junk the SAR ADC demodulates into our passband.
 // alpha ≈ 1 - e^(-2π·fc/fs), fc = 300 Hz, fs ≈ 20 kS/s.
