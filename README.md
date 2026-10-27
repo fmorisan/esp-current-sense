@@ -198,6 +198,37 @@ the gate is what manages it. This clamp+ADC pair cannot resolve much below ~2 A;
 readings under 2 A report as 0. A 50 A/1 V clamp or an ADS1115 16-bit ADC would
 lower the floor and allow a tighter gate.
 
+### ZMPT101B voltage frontend (true power, optional)
+
+The ZMPT101B module is a voltage transformer with a built-in sampling
+resistor: its output is a 0-centred AC waveform **DC-biased at VCC/2**
+(~2.5 V when powered from 5 V). Power it from **VIN (5 V)** — its VCC pin
+is 5 V only. Its primary terminals go across mains L/N (safety rules as in
+the CT section apply).
+
+Feed the ADS1115 `A1` like this — the divider provides the DC bias from the
+3V3 rail, and the coupling cap blocks the ZMPT's own 2.5 V DC so only the AC
+rides on the divider bias:
+
+```
+ZMPT101B VCC  ── VIN (5 V)
+ZMPT101B GND  ── GND
+ZMPT101B OUT ──[10 µF, + toward OUT]──┐
+                                       ●── A1 (ADS1115)
+3V3 ──[10k]──┬──[10k]── GND           │
+             └───────────┘  (node = 1.65 V)
+```
+
+- **Divider:** 10k top to 3V3, 10k bottom to GND → node sits at **1.65 V**,
+  symmetric headroom to the 3.3 V rail in both directions.
+- **10 µF polarity:** ZMPT OUT is at ~2.5 V DC, the node at 1.65 V, so the
+  **+ lead faces the ZMPT OUT**. Backwards it degrades/leaks.
+- **100 nF ceramic** node→GND optional, for RF junk (matters more with the
+  ADS1115 than the SAR ADC).
+- Sanity check with no mains on the ZMPT primary: `A1 bias ≈ 1650 mV`, flat.
+  With mains connected, the waveform should swing symmetrically about it; if
+  the positive peak approaches 3.3 V, trim the module's onboard pot down.
+
 ---
 
 ## Network plan (Home Assistant)
