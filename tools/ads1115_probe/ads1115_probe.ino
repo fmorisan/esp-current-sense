@@ -1,12 +1,10 @@
-// ADS1115 bring-up probe — standalone, no WiFi, no project deps.
+// ADS1115 dual-channel diagnostic — A0 = CT current, A1 = ZMPT101B voltage.
 //
-// Diagnostics performed at boot:
-//   1. Are there EXTERNAL pull-ups? (module powered/connected)
-//   2. Probe 0x48..0x4B with SDA=21, SCL=22
-//   3. If nothing valid, retry with the pins SWAPPED in software — proves
-//      whether the SDA/SCL wiring is reversed without touching hardware.
-//   4. Once found: A0 single-ended, PGA +/-4.096 V, 860 SPS, continuous,
-//      stream raw counts and a 1 s RMS summary.
+// The ADS1115 needs a settling conversion after a mux/PGA change: the first
+// conversion following a channel switch can return the previous channel's
+// data. This probe reads BOTH the first and the second conversion after each
+// switch so we can see exactly what is happening, and accumulates statistics
+// from the settled (second) conversion.
 //
 // Build/flash:
 //   arduino-cli compile --fqbn esp32:esp32:nodemcu-32s --upload \
@@ -17,18 +15,18 @@
 
 static const int kSdaPin = 21;
 static const int kSclPin = 22;
-static const uint8_t kExpectedAddr = 0x48;   // ADDR -> GND
+static const uint8_t kAddr = 0x48;
 
-static const uint16_t kConfig =
-    0x8000 |  // OS: start conversions
-    0x4000 |  // MUX: 100 = AIN0 single-ended vs GND
-    0x0200 |  // PGA: 001 = +/-4.096 V
-    0x0100 |  // MODE: continuous
-    0x00E0 |  // DR: 111 = 860 SPS
-    0x0003;   // comparator disabled
+static const uint16_t kConfigA0 = 0x8000 | 0x4000 | 0x0200 | 0x0000 | 0x00E0 | 0x0003; // +/-4.096
+static const uint16_t kConfigA1 = 0x8000 | 0x5000 | 0x0200 | 0x0000 | 0x00E0 | 0x0003; // +/-4.096 (A1 vs GND)
 
-static const float kLsbUv = 4096000.0f / 32768.0f;  // ~125 uV per count
+static const float kLsbA0Uv = 4096000.0f / 32768.0f;  // 125 uV
+static const float kLsbA1Uv = 4096000.0f / 32768.0f;  // 125 uV
+static const uint32_t kSettleUs = 1800;
+
 static uint8_t activeAddr = 0;
+
+struct Pair { int16_t first; int16_t second; };
 
 static bool writeReg(uint8_t reg, uint16_t value) {
   Wire.beginTransmission(activeAddr);
@@ -47,14 +45,22 @@ static bool readReg(uint8_t reg, uint16_t& value) {
   return true;
 }
 
-static bool readConversion(int16_t& out) {
+static uint16_t oneConversion(uint16_t cfg) {
+  writeReg(0x01, cfg);
+  delayMicroseconds(kSettleUs);
   uint16_t raw = 0;
-  if (!readReg(0x00, raw)) return false;
-  out = (int16_t)raw;
-  return true;
+  readReg(0x00, raw);
+  return raw;
 }
 
-// Probe 0x48..0x4B: require a stable ACK *and* a readable config register.
+// First conversion after switching config may be stale; second is settled.
+static Pair readPair(uint16_t cfg) {
+  Pair p;
+  p.first  = (int16_t)oneConversion(cfg);
+  p.second = (int16_t)oneConversion(cfg);
+  return p;
+}
+
 static uint8_t findAds() {
   for (uint8_t a = 0x48; a <= 0x4B; ++a) {
     int acks = 0;
@@ -67,101 +73,82 @@ static uint8_t findAds() {
     activeAddr = a;
     uint16_t cfg = 0;
     if (readReg(0x01, cfg) && cfg != 0x0000 && cfg != 0xFFFF) {
-      Serial.printf("[ads] FOUND at 0x%02X (acks %d/3, config reads 0x%04X)\r\n", a, acks, cfg);
+      Serial.printf("[ads] FOUND at 0x%02X (acks %d/3)\r\n", a, acks);
       return a;
     }
-    Serial.printf("[ads] 0x%02X acks %d/3 but config unreadable\r\n", a, acks);
   }
   return 0;
 }
 
-static bool tryBus(int sda, int scl) {
-  Wire.end();
-  Wire.begin(sda, scl);
-  Wire.setClock(50000);
-  delay(20);
-  Serial.printf("[i2c] probing with SDA=GPIO%d SCL=GPIO%d\r\n", sda, scl);
-  activeAddr = 0;
-  return findAds() != 0;
-}
+struct Chan {
+  double sum = 0, sumSq = 0;
+  int16_t mn = 32767, mx = -32768;
+  uint32_t n = 0;
+  void add(int16_t raw, double mv) {
+    sum += mv; sumSq += mv * mv; ++n;
+    if (raw < mn) mn = raw;
+    if (raw > mx) mx = raw;
+  }
+  double mean() const { return n ? sum / n : 0; }
+  double rms() const {
+    if (!n) return 0;
+    const double m = mean();
+    const double v = sumSq / n - m * m;
+    return v > 0 ? sqrt(v) : 0;
+  }
+  void reset() { sum = sumSq = 0; n = 0; mn = 32767; mx = -32768; }
+};
 
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\r\n[ads1115-probe] boot");
+  Serial.println("\r\n[ads1115-probe] dual-channel diagnostic");
 
-  // External pull-up test: with the ESP32's internal pull-ups off, a powered
-  // module holds both lines high. A floating bus reads 0 / wanders.
   pinMode(kSdaPin, INPUT);
   pinMode(kSclPin, INPUT);
   delay(20);
-  const int bareSda = digitalRead(kSdaPin);
-  const int bareScl = digitalRead(kSclPin);
-  Serial.printf("[i2c] internal pull-ups off: SDA=%d SCL=%d -> external pull-ups %s\r\n",
-                bareSda, bareScl, (bareSda && bareScl) ? "PRESENT" : "MISSING");
+  Serial.printf("[i2c] external pull-ups %s\r\n",
+                (digitalRead(kSdaPin) && digitalRead(kSclPin)) ? "PRESENT" : "MISSING");
 
   pinMode(kSdaPin, INPUT_PULLUP);
   pinMode(kSclPin, INPUT_PULLUP);
+  Wire.begin(kSdaPin, kSclPin);
+  Wire.setClock(100000);
+  delay(20);
 
-  bool ok = tryBus(kSdaPin, kSclPin);
-  if (!ok) {
-    Serial.println("[i2c] nothing valid — retrying with SDA/SCL SWAPPED in software");
-    ok = tryBus(kSclPin, kSdaPin);
-    if (ok) {
-      Serial.println("[i2c] *** SUCCESS WITH SWAPPED PINS -> your SDA/SCL wires are reversed ***");
-    }
-  }
-
-  if (!ok) {
-    Serial.println("[i2c] no ADS1115 on either pin order. Check, in this order:");
-    Serial.println("       1. VDD on the module reads ~3.3 V (multimeter)");
-    Serial.println("       2. GND continuity module <-> ESP32");
-    Serial.println("       3. SDA/SCL continuity to GPIO21/GPIO22");
-    Serial.println("       4. ADDR pin tied to GND (~0 V)");
-    Serial.println("       5. reseat the module in the breadboard (loose row)");
-    return;
-  }
-
-  writeReg(0x01, kConfig);
-  delay(10);
-  uint16_t verify = 0;
-  if (readReg(0x01, verify)) {
-    Serial.printf("[ads] config 0x%04X written, read back 0x%04X\r\n", kConfig, verify);
+  if (!findAds()) {
+    Serial.println("[i2c] no ADS1115 found.");
   }
 }
 
 void loop() {
   if (activeAddr == 0) { delay(1000); return; }
 
-  static uint32_t winStart = millis();
-  static double sum = 0.0, sumSq = 0.0;
-  static uint32_t n = 0, bad = 0, lastPrint = 0;
+  static Chan a0, a1;
+  static uint32_t winStart = millis(), lastTrace = 0;
+  static uint32_t bad = 0;
+  static Pair last0, last1;
 
-  int16_t raw = 0;
-  if (readConversion(raw)) {
-    const double mv = (double)raw * kLsbUv / 1000.0;
-    sum += mv; sumSq += mv * mv; ++n;
-  } else {
-    ++bad;
-  }
+  last0 = readPair(kConfigA0);
+  last1 = readPair(kConfigA1);
 
-  if (millis() - lastPrint >= 250) {
-    lastPrint = millis();
-    Serial.printf("[raw] %6d  %8.2f mV\r\n", raw, (double)raw * kLsbUv / 1000.0);
+  a0.add(last0.second, (double)last0.second * kLsbA0Uv / 1000.0);
+  a1.add(last1.second, (double)last1.second * kLsbA1Uv / 1000.0);
+
+  if (millis() - lastTrace >= 500) {
+    lastTrace = millis();
+    Serial.printf("[trace] A0 first=%6d second=%6d | A1 first=%6d second=%6d\r\n",
+                  last0.first, last0.second, last1.first, last1.second);
   }
 
   if (millis() - winStart >= 1000) {
-    if (n > 0) {
-      const double mean = sum / n;
-      const double variance = sumSq / n - mean * mean;
-      const double rms = variance > 0 ? sqrt(variance) : 0.0;
-      Serial.printf("[stats] n=%lu  bias=%.1f mV  ac_rms=%.2f mV  (%.2f A @10mV/A)  i2c_err=%lu\r\n",
-                    (unsigned long)n, mean, rms, rms / 10.0, (unsigned long)bad);
-    } else {
-      Serial.printf("[stats] no samples, i2c_err=%lu\r\n", (unsigned long)bad);
-    }
-    winStart = millis(); sum = sumSq = 0.0; n = 0; bad = 0;
+    Serial.printf("[A0 CT] n=%lu bias=%.1f mV ac_rms=%.2f mV  raw %d..%d\r\n",
+                  (unsigned long)a0.n, a0.mean(), a0.rms(), a0.mn, a0.mx);
+    Serial.printf("[A1 AC] n=%lu bias=%.1f mV ac_rms=%.2f mV  raw %d..%d\r\n",
+                  (unsigned long)a1.n, a1.mean(), a1.rms(), a1.mn, a1.mx);
+    Serial.printf("[sum]  I=%.2f A @10mV/A  i2c_err=%lu\r\n\r\n",
+                  a0.rms() / 10.0, (unsigned long)bad);
+    a0.reset(); a1.reset();
+    winStart = millis();
   }
-
-  delay(1);
 }

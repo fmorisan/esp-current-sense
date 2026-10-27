@@ -23,8 +23,9 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
-#include "ct_sensor.h"
+#include "current_sensor.h"
 #include "mqtt.h"
+#include "voltage_sensor.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -43,7 +44,6 @@ static const uint32_t kConnectTimeoutMs = 15000;
 static const uint32_t kDebugPrintMs = 3000;         // serial status cadence
 static const uint32_t kSampleBurstMs = 20;          // per-loop sampling budget
 static const uint32_t kMqttPublishMs = 5000;        // state publish cadence
-static const float kAssumedMainsVoltage = 220.0f;   // until real voltage sensing (phase 6)
 
 static WebServer server(80);
 static bool wifiReady = false;
@@ -61,17 +61,22 @@ static void setLed(bool on) { digitalWrite(LED_BUILTIN, on ? HIGH : LOW); }
 // One JSON payload shared by HTTP /metrics and the MQTT state topic so HA
 // value_templates and any curl debugging always agree.
 static void buildMetricsJson(char* buf, size_t len) {
+  const float amps = current::currentA();
+  const float volts = voltage::voltageV();
   snprintf(buf, len,
-           "{\"current_a\":%.3f,\"power_va\":%.1f,\"voltage\":%.1f,"
+           "{\"current_a\":%.3f,\"voltage_v\":%.1f,\"power_va\":%.1f,"
            "\"energy_kwh\":%.4f,\"vrms_mv\":%.1f,\"bias_mv\":%.0f,\"mains_hz\":%.1f,"
+           "\"ct_vrms_mv\":%.2f,\"ct_bias_mv\":%.0f,"
            "\"win_ms\":%lu,\"windows\":%u,"
            "\"wifi_rssi_dbm\":%d,\"heap_free\":%u,\"uptime_s\":%lu,"
-           "\"source\":\"adc\"}",
-           ct::currentA(), ct::powerVa(kAssumedMainsVoltage), kAssumedMainsVoltage,
-           energyWh / 1000.0, ct::vrmsMillivolts(), ct::biasMillivolts(),
-           ct::measuredMainsHz(), (unsigned long)ct::windowMs,
-           (unsigned)ct::windowsDone, (int)WiFi.RSSI(),
-           (unsigned)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
+           "\"source\":\"ads1115+zmapt\"}",
+           amps, volts, amps * volts,
+           energyWh / 1000.0, voltage::vrmsMillivolts(), voltage::biasMillivolts(),
+           voltage::measuredMainsHz(), current::vrmsMillivolts(),
+           current::biasMillivolts(),
+           (unsigned long)voltage::windowMs, (unsigned)voltage::windowsDone,
+           (int)WiFi.RSSI(), (unsigned)ESP.getFreeHeap(),
+           (unsigned long)(millis() / 1000));
 }
 
 static void handleMetrics() {
@@ -123,9 +128,10 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(kSerialBaud);
   delay(200);
-  Serial.println("\r\n[esp-current-sense] boot — phase 4 (CT + HTTP + MQTT)");
+  Serial.println("\r\n[esp-current-sense] boot — CT (ADS1115) + ZMPT101B + HTTP + MQTT");
 
-  ct::setup();
+  voltage::setup();
+  current::setup();
   mqtt::setup();
   connectWifi();
 
@@ -138,14 +144,16 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  ct::burst(kSampleBurstMs);
+  voltage::burst(kSampleBurstMs);
+  current::burst(kSampleBurstMs);
   mqtt::loop();
 
-  // Integrate apparent power over time -> Wh (resets at boot; HA treats
-  // total_increasing drops as a meter reset, so that's safe).
+  // Integrate measured apparent power over time -> Wh (resets at boot; HA
+  // treats total_increasing drops as a meter reset, so that's safe).
   const uint32_t now = millis();
   if (haveLastAccum) {
-    energyWh += ct::powerVa(kAssumedMainsVoltage) * (now - lastAccumMs) / 3600000.0;
+    const float watts = current::currentA() * voltage::voltageV();
+    energyWh += watts * (now - lastAccumMs) / 3600000.0;
   }
   lastAccumMs = now;
   haveLastAccum = true;
@@ -171,11 +179,17 @@ void loop() {
 
   if (millis() - lastDebugPrint >= kDebugPrintMs) {
     lastDebugPrint = millis();
-    Serial.printf("[ct] win=%lums  bias=%.0fmV  vrms=%.1fmV  I=%.2fA  min=%d max=%d  xings=%u  mains=%.1fHz  (windows=%u)\r\n",
-                  (unsigned long)ct::windowMs, ct::biasMillivolts(), ct::vrmsMillivolts(),
-                  ct::currentA(), ct::minMillivolts(), ct::maxMillivolts(),
-                  ct::zeroCrossings(), ct::measuredMainsHz(),
-                  (unsigned)ct::windowsDone);
+    Serial.printf("[v] win=%lums bias=%.0fmV vrms=%.1fmV V=%.1f mains=%.1fHz xings=%u (win=%u)\r\n",
+                  (unsigned long)voltage::windowMs, voltage::biasMillivolts(),
+                  voltage::vrmsMillivolts(), voltage::voltageV(),
+                  voltage::measuredMainsHz(), voltage::zeroCrossings(),
+                  (unsigned)voltage::windowsDone);
+    Serial.printf("[i] ads=%s bias=%.0fmV vrms=%.2fmV I=%.2fA raw=%d..%d err=%lu (win=%u)\r\n",
+                  current::present() ? "ok" : "MISSING", current::biasMillivolts(),
+                  current::vrmsMillivolts(), current::currentA(),
+                  current::minCounts(), current::maxCounts(),
+                  (unsigned long)current::errors(),
+                  (unsigned)current::windowsDoneCount());
   }
 
   delay(1);

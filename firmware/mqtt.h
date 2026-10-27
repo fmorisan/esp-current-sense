@@ -52,7 +52,7 @@ static void publishDiscovery() {
   const char* dev =
       "\"device\":{\"identifiers\":[\"" HOSTNAME "\"],"
       "\"name\":\"Home energy monitor\",\"manufacturer\":\"home-made\","
-      "\"model\":\"NodeMCU-32S + SCT-013 100A/1V\"}";
+      "\"model\":\"NodeMCU-32S + ADS1115 + SCT-013 100A/1V + ZMPT101B\"}";
 
   struct Entity {
     const char* id;
@@ -64,6 +64,7 @@ static void publishDiscovery() {
   };
   static const Entity kEntities[] = {
       {"current", "Home current", "current_a", "A", "current", "measurement"},
+      {"voltage", "Home voltage", "voltage_v", "V", "voltage", "measurement"},
       {"power", "Home apparent power", "power_va", "VA", "apparent_power", "measurement"},
       {"energy", "Home energy", "energy_kwh", "kWh", "energy", "total_increasing"},
   };

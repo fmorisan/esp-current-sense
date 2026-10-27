@@ -159,18 +159,16 @@ input-only, so it can't interfere with boot strapping.
 
 ### Accuracy caveats (and upgrade paths)
 
-- ESP32 ADC is noticeably non-linear near 0 V and near full scale. Firmware
-  will use the factory eFuse calibration + 11 dB attenuation + heavy
-  oversampling (sample ≥ 2 kHz, RMS over whole mains cycles — the window is
-  closed on hysteresis-counted rising edges, so it always spans complete
-  half-cycles and self-adapts to 50 or 60 Hz) which is plenty for whole-home
-  monitoring.
-- Current-only measurement gives **apparent power** (VA) assuming nominal
-  220 V and PF ≈ 1. Good enough for the HA energy dashboard; for true
-  power/kWh later, add a ZMPT101B mains-voltage input on another ADC1 pin
-  and compute real power.
-- If precision matters later: an ADS1115 (I²C, 16-bit) replaces the noisy
-  ESP32 SAR ADC for ~£5.
+- **Voltage** uses the ESP32 SAR ADC on GPIO34 (ZMPT101B through a 10 µF
+  coupling into a 10k/10k bias divider), with factory eFuse calibration,
+  11 dB attenuation and whole-cycle RMS windows — plenty for mains voltage.
+- **Current** uses a 16-bit ADS1115 on A0 (single-shot, 860 SPS, ±4.096 V PGA)
+  behind the CT's series-cap divider. Its ~0.25 mV RMS noise floor corresponds
+  to ~0.03 A at k=127, so the noise gate sits at 0.05 A — real sub-amp
+  resolution, unlike the SAR ADC's ~1.3 A floor.
+- Measurement gives **apparent power** (VA) as V_rms × I_rms, assuming PF ≈ 1.
+  For true power/kWh, add phase-corrected sampling (V and I phase difference)
+  — the ZMPT and CT frontends must then be filtered symmetrically.
 
 ### Safety
 
@@ -182,21 +180,22 @@ voltage-output variant is safe to disconnect at any time (a plain
 current-output SCT-013-000 must never run open-circuit, but yours has the
 burden built in).
 
-### Calibration constant
+### Calibration constants
 
-Firmware `kAmpsPerVolt = 127.0` — calibrated against a 2200 W kettle on 220 V
-mains through the final frontend (series-cap tip line + 300 Hz digital
-low-pass): kettle displays 10.0–10.5 A against a nameplate 10.0 A. Residual
-accuracy ±3 %, dominated by element/mains tolerance (kettle power scales with
-V², and mains voltage drifts a few percent) — refine against a utility meter
-over a day or a plug-in power meter for better.
+- **Current:** `kAmpsPerVolt = 127.0` in `current_sensor.h` — calibrated against
+  a 2200 W kettle on 220 V mains through the final frontend (series-cap tip
+  line + 300 Hz digital low-pass): kettle displays 10.0–10.5 A against a
+  nameplate 10.0 A. Residual accuracy ±3 %, dominated by element/mains
+  tolerance (kettle power scales with V², and mains voltage drifts a few
+  percent) — refine against a utility meter over a day or a plug-in power
+  meter for better. If you fit the optional 100 nF at the CT node, trim to
+  ≈125.5.
+- **Voltage:** `kVoltsPerMv = 0.691` in `voltage_sensor.h` — calibrated against
+  a multimeter: 219 V ↔ ~317 mV RMS at the node. Re-derive whenever the
+  divider, coupling cap or ZMPT pot changes.
 
-Noise gate: `kNoiseFloorA = 2.0` — the node's idle floor measures ~14–16 mV RMS
-(~1.8–2 A equivalent at k=127). That floor is the ESP32 SAR ADC's own conversion
-noise, not coupled RF: the 100 nF ceramic at the pin did **not** lower it, so
-the gate is what manages it. This clamp+ADC pair cannot resolve much below ~2 A;
-readings under 2 A report as 0. A 50 A/1 V clamp or an ADS1115 16-bit ADC would
-lower the floor and allow a tighter gate.
+Noise gates: `kNoiseFloorA = 0.05` on the ADS1115 current channel (its
+~0.25 mV RMS floor ≈ 0.03 A); `kNoiseFloorMv = 3.0` on the voltage channel.
 
 ### ZMPT101B voltage frontend (true power, optional)
 
