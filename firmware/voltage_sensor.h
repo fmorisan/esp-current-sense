@@ -22,9 +22,9 @@
 namespace voltage {
 
 static const uint8_t kPin = 34;            // ADC1_CH6 — input-only, safe with WiFi
-// Calibrated against a multimeter: 219 V mains <-> ~317 mV RMS at the node.
+// Calibrated against a multimeter: 220 V mains <-> ~281.6 mV RMS at the node.
 // Re-derive whenever the divider, coupling cap or ZMPT pot changes.
-static const float kVoltsPerMv = 0.691f;
+static const float kVoltsPerMv = 0.781f;
 // Below this the input is considered "no mains" (idle noise ~0.3-0.8 mV RMS).
 static const float kNoiseFloorMv = 3.0f;
 // Digital single-pole low-pass applied to samples before RMS: kills the
