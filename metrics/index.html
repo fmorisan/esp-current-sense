@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>esp-current-sense — power dashboard</title>
+  <style>
+    :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px 20px; background: #0f1115; color: #e6e6e6; }
+    main { max-width: 1120px; margin: auto; }
+    h1 { font-size: 23px; margin: 0 0 4px; }
+    p { color: #9aa4b2; margin: 0 0 22px; }
+    form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+    label { display: block; flex: 1; min-width: 220px; color: #b6c0cf; }
+    input, button { font: inherit; border-radius: 7px; padding: 10px 14px; }
+    input { width: 100%; margin-top: 5px; background: #171a21; color: #e6e6e6; border: 1px solid #384152; }
+    button { border: 0; background: #7dd3fc; color: #082536; font-weight: 650; cursor: pointer; }
+    button.secondary { background: #252d3c; color: #d5deea; }
+    button:disabled, input:disabled { opacity: .5; cursor: default; }
+    :focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+    #status { min-height: 24px; margin: 16px 0; color: #9aa4b2; }
+    #status.error { color: #fca5a5; }
+    .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
+    .tile { padding: 15px 18px; background: #171a21; border: 1px solid #293142; border-radius: 10px; }
+    .value { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .unit { font-size: 15px; color: #9aa4b2; }
+    .key { font-size: 12px; color: #9aa4b2; }
+    .watts { color: #4ade80; }
+    .va { color: #7dd3fc; }
+    .reactive { color: #fbbf24; }
+    .chart { background: #171a21; border: 1px solid #293142; border-radius: 12px; overflow: hidden; }
+    .power-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 24px; align-items: center; padding: 20px; margin-bottom: 18px; }
+    .power-panel h2 { font-size: 19px; margin: 0 0 8px; }
+    .power-panel p { font-size: 13px; margin: 0 0 16px; }
+    .power-readings { margin: 0 0 16px; font-variant-numeric: tabular-nums; }
+    .power-readings div { display: flex; justify-content: space-between; gap: 16px;
+      border-bottom: 1px solid #293142; padding: 8px 0; }
+    .power-readings dt { font-size: 13px; }
+    .power-readings dd { margin: 0; font-weight: 650; white-space: nowrap; }
+    #power-notice { color: #9aa4b2; }
+    .legend { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      flex-wrap: wrap; padding: 16px 20px 0; }
+    .legend span + span { margin-left: 20px; }
+    #clear { font-size: 12px; padding: 5px 10px; }
+    svg { width: 100%; height: auto; display: block; }
+    .stats { color: #9aa4b2; padding: 0 20px 16px; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .hint { font-size: 13px; margin-top: 18px; }
+    code { color: #cbd5e1; }
+    @media (max-width: 600px) {
+      body { padding: 18px 10px; }
+      h1 { font-size: 20px; }
+      .tiles { grid-template-columns: repeat(2, 1fr); }
+      .power-panel { grid-template-columns: 1fr; gap: 4px; }
+      .value { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>esp-current-sense <span style="color: #9aa4b2">/ power dashboard</span></h1>
+    <p>Live while this page is open. Watch W and VA change as you switch appliances on and off.</p>
+    <form id="connect-form">
+      <label for="board">Board address
+        <input id="board" value="192.168.0.158" placeholder="192.168.0.158 or esp-current-sense.local"
+          required spellcheck="false">
+      </label>
+      <button id="start" type="submit">Start tracking</button>
+      <button id="pause" class="secondary" type="button" disabled>Pause</button>
+    </form>
+    <div id="status" role="status" aria-live="polite">Connecting automatically. Readings refresh about every 2 seconds.</div>
+    <section class="tiles" aria-label="Latest readings">
+      <div class="tile"><div class="value watts"><span id="watts">—</span> <span class="unit">W</span></div><div class="key">Real power · consumption</div></div>
+      <div class="tile"><div class="value va"><span id="va">—</span> <span class="unit">VA</span></div><div class="key">Apparent power</div></div>
+      <div class="tile"><div class="value"><span id="pf">—</span></div><div class="key">Power factor</div></div>
+      <div class="tile"><div class="value"><span id="amps">—</span> <span class="unit">A</span></div><div class="key">RMS current</div></div>
+      <div class="tile"><div class="value"><span id="volts">—</span> <span class="unit">V</span></div><div class="key">RMS voltage</div></div>
+      <div class="tile"><div class="value"><span id="energy">—</span> <span class="unit">kWh</span></div><div class="key">Energy imported since board boot</div></div>
+    </section>
+    <section class="chart power-panel" aria-label="Normalized power triangle">
+      <svg id="power-diagram" viewBox="0 0 480 480" role="img"
+        aria-labelledby="power-title power-description">
+        <title id="power-title">Apparent power on a unit circle</title>
+        <desc id="power-description">Real power is the horizontal component. The vertical component is an estimated non-active magnitude.</desc>
+      </svg>
+      <div>
+        <h2>Power triangle · unit circle</h2>
+        <p>The <span class="va">blue radius is apparent power S</span>, normalized to 1.
+          Its <span class="watts">horizontal component is real power P</span>;
+          its <span class="reactive">vertical component estimates reactive magnitude |Q|</span>.</p>
+        <dl class="power-readings">
+          <div class="watts"><dt>Real power P</dt><dd id="power-real">— W</dd></div>
+          <div class="reactive"><dt>Estimated |Q|</dt><dd id="power-reactive">— var</dd></div>
+          <div class="va"><dt>Apparent power S</dt><dd id="power-apparent">— VA</dd></div>
+          <div><dt>Real fraction P / S</dt><dd id="power-fraction">—</dd></div>
+        </dl>
+        <p id="power-notice">Waiting for readings.</p>
+        <p><strong>Magnitude only:</strong> |Q| ≈ √(S² − P²). The firmware cannot tell
+          leading from lagging, so the estimate is drawn upward without assigning a sign.
+          For non-sinusoidal loads, this also includes distortion—not just reactive power.
+          This is a power diagram, not reactance in ohms.</p>
+      </div>
+    </section>
+    <section class="chart" aria-label="W and VA over time">
+      <div class="legend">
+        <div><span class="watts">━ Real power · W</span><span class="va">┄ Apparent power · VA</span></div>
+        <button id="clear" type="button" class="secondary">Clear chart</button>
+      </div>
+      <svg id="chart" viewBox="0 0 960 390" role="img" aria-labelledby="chart-title">
+        <title id="chart-title">Real and apparent power over time</title>
+      </svg>
+      <div id="summary" class="stats">No readings yet.</div>
+      <div id="inspect" class="stats">Move over the chart to inspect a reading.</div>
+    </section>
+    <p class="hint">
+      Both axes use the same numeric scale. W is the useful comparison for reducing energy use;
+      VA also includes the reactive component. The chart keeps up to 30 minutes in this tab only;
+      reloading clears it. Pauses and failed reads leave gaps. Imported energy comes from the board's counter
+      and resets when it reboots. This is a diagnostic view of your homemade sensor, not a billing meter.
+    </p>
+  </main>
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>

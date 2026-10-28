@@ -21,6 +21,10 @@ Already installed on this Mac:
 
 ```sh
 make build     # compile
+make test      # host-side sample buffer/JSON + signed-power tests (C++ compiler required)
+make scope     # local I/V waveform viewer at http://127.0.0.1:8000
+make metrics   # live W/VA dashboard at http://127.0.0.1:8002
+make test-scope # local dashboard tests (Python 3 + Node.js)
 make upload    # compile + flash (PORT=/dev/cu... to override)
 make monitor   # tail serial @115200
 make dev       # upload + monitor
@@ -36,7 +40,7 @@ uv run --with pyserial python tools/serialpeek.py
 
 ## Current phase
 
-Phase 4 — CT sampling + HTTP + MQTT with HA discovery.
+CT sampling + HTTP + MQTT with HA discovery + HTTP OTA updates.
 
 - Joins WiFi from `firmware/secrets.h` (copy from `secrets.h.example`, gitignored).
 - LED: fast blink = joining, **steady on = ready**, off = lost connection (retries every 10 s).
@@ -55,6 +59,120 @@ wired to GPIO34 (phase 3 code is live; values go real the moment it is).
 The board also answers on `http://esp-current-sense.local/` **if** your
 router doesn't block multicast — this LAN does (mDNS verified dead), so give
 the board a **DHCP reservation** on the router and use the IP.
+
+### ADC sample snapshots
+
+`GET /samples` returns the latest **256 pairs** (or fewer while the buffer fills),
+oldest first. The homepage links to it:
+
+```sh
+curl http://192.168.0.158/samples
+# {"voltage_mv":[1650,1702,1751],"current_mv":[1651.250,1658.500,1665.750]}
+```
+
+Both arrays have the same length; matching indexes are approximately aligned
+in time. One pair is recorded per successful ADS1115 current read, using the
+existing GPIO34 voltage reading nearest that conversion's midpoint. There are
+no extra ADC reads and no timestamps.
+
+- `voltage_mv`: GPIO34 ADC-input millivolts **before** the firmware's digital
+  low-pass filter.
+- `current_mv`: ADS1115 A0 millivolts with the configured current polarity
+  applied around the snapshot's mean. This reflects the AC waveform without
+  negating its DC bias. Use `GET /samples?raw=1` on the board for uncorrected
+  ADC-input readings (raw counts × 0.125 mV).
+- Both retain their DC bias; these are **not** mains volts or amps. Subtract
+  each array's mean if you want centred waveforms for plotting.
+- If no pairs have been acquired (for example, the ADS1115 is missing), both
+  arrays are empty. Read errors skip the whole pair; old samples remain until
+  replaced, so a snapshot is not a guarantee of fresh data.
+
+This is a small diagnostic snapshot, not a continuous stream or precise
+timebase. Sampling pauses while HTTP sends the response, and HTTP/MQTT work can
+leave timing gaps between pairs. Prefer occasional fetches rather than rapid
+polling. The history uses about 2 KB of RAM; JSON is sent in small chunks.
+
+### Current-sensor polarity
+
+`kCurrentPolarity` in `firmware/current_polarity.h` is **−1** for this
+installation's reversed current-sensor polarity. Change it to **+1** if the
+physical sensor/reference polarity changes. Keep `kAmpsPerMv` positive.
+
+The same setting corrects signed real power / power factor and the default
+`/samples` current waveform. Raw ADC history, bias diagnostics, RMS current,
+and apparent power remain unchanged. `/metrics` reports `current_polarity`;
+the scope requires no separate inversion and must not invert the data again.
+Its raw-ADC view is available directly on the board at `/samples?raw=1`.
+
+The old `abs()` masking is removed: consumption should give positive W, while
+opposite power flow gives negative W and PF. **That sign is not leading/lagging**;
+reactive direction still requires phase measurement. `energy_kwh` accumulates
+only positive real power (import), so export cannot decrease Home Assistant's
+`total_increasing` consumption counter.
+
+After flashing, check a mostly resistive load such as the kettle: corrected
+voltage/current waveforms should roughly align and W/PF should be positive.
+Polarity inversion is not a time-delay or phase-offset calibration, and does
+not require rewiring mains conductors.
+
+### Local waveform viewer
+
+Run `make scope`, then open **http://127.0.0.1:8000**. Enter the board's IP
+address (or hostname) and click **Fetch samples**. Each click requests one
+snapshot; there is no automatic polling. The address is remembered locally.
+
+The viewer overlays V and I against sample index, with separate, color-coded
+vertical scales so a small current signal is still visible. **Remove DC bias**
+is enabled by default; uncheck it to inspect the DC-biased, polarity-corrected
+waveforms. Both axes use ADC-scale **mV**, not calibrated mains volts or amps. The original
+MQTT dashboard in `index.html` is unchanged.
+
+The viewer needs only Python 3 and a browser, with no packages or CDN scripts.
+A loopback-only server serves `scope/` and proxies `GET /samples`, avoiding
+browser CORS restrictions without changing the firmware. It does not expose
+the repository, secrets, or OTA endpoints. Stop it with Ctrl-C. To change the
+local port, run `python3 tools/serve_scope.py --port 8001`.
+
+### Live power dashboard (W and VA)
+
+Run `make metrics`, then open **http://127.0.0.1:8002**. It automatically polls
+the board's `/metrics` endpoint about every **2 seconds** while the page is open,
+plotting **real power (W)** and **apparent power (VA)** together against local
+time. Both axes share the same numeric scale. Pause tracking to change the board
+address, then resume; the address is remembered locally. No Home Assistant token,
+additional firmware changes, external packages, or Internet access are needed.
+
+- The chart retains up to **30 minutes** of readings in this browser tab.
+  Reloading clears it; it does not retrieve historical readings from the board.
+- Pauses, network failures, and detected board reboots leave gaps instead of
+  connecting unrelated readings. Retries never overlap. A failed read is clearly
+  marked, and the last displayed values remain visible with their read time.
+- Hover over the chart to inspect W and VA. The cards also show power factor,
+  current, voltage, and the board's since-boot imported-energy counter.
+- A live **unit-circle power triangle** represents apparent power S as a radius
+  of 1, with real power P/S horizontally and estimated reactive magnitude
+  |Q|/S vertically. Actual W, VA, and estimated var are listed alongside it.
+  The estimate is `sqrt(S² - P²)`: for sinusoidal loads it is |Q|, but harmonics
+  add distortion to this non-active magnitude. The firmware cannot determine
+  reactive sign (leading/lagging), so the estimate is drawn upward without
+  assigning a sign. Zero VA cannot be normalized; readings with |W| > VA are
+  flagged instead of drawing a misleading triangle. This is power, not reactance
+  in ohms.
+- Compare **W** before and after switching a load off to see changes in real
+  consumption. VA includes the reactive component and is not energy in kWh.
+  The energy counter resets at board reboot; sensor calibration still determines
+  accuracy. This is not a billing meter.
+
+The dashboard uses the same loopback-only proxy as the ADC viewer, but exposes
+only `/metrics` and its own static assets. The ADC viewer and original MQTT
+dashboard remain unchanged. Browser sleep/background throttling may cause gaps;
+this page is for live observation, not unattended long-term logging.
+
+To use another local port:
+
+```sh
+python3 tools/serve_scope.py --metrics --port 8003
+```
 
 ### MQTT
 
@@ -83,6 +201,42 @@ HA box, create an MQTT user, then in `firmware/secrets.h` set `MQTT_HOST` to
 the HA box IP and fill `MQTT_USER`/`MQTT_PASS` — `make dev`. Entities appear
 in HA automatically (Settings → Devices & services → MQTT). Give the board a
 DHCP reservation. Until then, the HA entities would track the test broker.
+
+### OTA firmware updates (local network)
+
+The existing HTTP server serves a browser updater at `http://<board-ip>/update`,
+also linked from `/`. It uses `HTTPUpdateServer` bundled with the ESP32 core;
+no extra library is needed.
+
+1. **First time only:** run `make upload` over USB to install this OTA-capable
+   firmware. The default NodeMCU-32S partition layout already has two OTA app
+   slots; keep using that layout for future builds.
+2. For subsequent updates, run `make build`.
+3. Open `http://<board-ip>/update` (for example,
+   `http://192.168.0.158/update`). In the **Firmware** form, select
+   `.build/firmware.ino.bin` and click **Update Firmware**. Do not use the
+   FileSystem form or upload the merged, bootloader, or partitions binaries.
+4. Wait for the success message and automatic reboot, then check `/metrics`.
+   Sampling/MQTT pause during the upload; uptime and the since-boot energy
+   counter reset after reboot. Keep the board powered throughout the update.
+
+Alternatively, upload from the command line (the matching `Origin` header is
+required by the core updater's browser-origin check):
+
+```sh
+BOARD_URL=http://192.168.0.158
+curl --fail --show-error -H "Origin: $BOARD_URL" \
+  -F 'firmware=@.build/firmware.ino.bin' "$BOARD_URL/update"
+```
+
+Check the response body for **Update Success**; the bundled updater can return
+HTTP 200 even when it reports an update error.
+
+**No authentication or TLS for now:** anyone who can reach the board can replace
+its firmware. Use only on a trusted LAN; do not port-forward or expose this
+server to the Internet. Authentication can be added later through the updater's
+credential options. Keep OTA support in future firmware if you want to continue
+updating wirelessly.
 
 ---
 
@@ -121,10 +275,12 @@ the simulator) and `docs/ct-frontend.url`. Regenerate both with
 ```
  3V3 ──[ 10k ]──┬──[ 10k ]── GND
                 │
-                ├──► GPIO34  (ADC1_CH6)
+                ├──► ADS1115 A0   (I2C 0x48 on GPIO21/22)
                 │
                 └──[ 10 µF, + toward node ]──●── CT tip
 CT sleeve ──────────────────────────── GND   (● = node)
+
+ADS1115 VDD ── 3V3   ADS1115 GND ── GND   SDA ── GPIO21   SCL ── GPIO22
 ```
 
 > ⚠️ **The series coupling cap in the tip line is REQUIRED for this clamp —
@@ -145,17 +301,24 @@ the comfortable middle of that range.
 
 ### Pin choice
 
-**Use GPIO34.** On the ESP32, ADC2 (GPIO 0, 2, 4, 12–15, 25–27) is
-unusable while WiFi is on — and WiFi is the whole point here. ADC1 pins
-(GPIO 32–39) are the only safe ones. GPIO34 is the best of them:
-input-only, so it can't interfere with boot strapping.
+**Current (CT) — ADS1115 A0.** The biased CT signal goes to the ADS1115's A0
+input; the ADS1115 talks to the ESP32 over I2C on **GPIO21 (SDA)** and
+**GPIO22 (SCL)**. That keeps the 16-bit converter next to the signal and
+leaves the ESP32's own ADC free for the voltage channel.
 
-| Purpose            | Pin     | ADC channel | Notes                              |
-|--------------------|---------|-------------|------------------------------------|
-| **CT signal**      | GPIO34  | ADC1_CH6    | primary choice, input-only         |
-| 2nd/3rd CT (later) | GPIO32/33 | ADC1_CH4/5 | both safe, have pull-up capability |
-| avoid              | GPIO35/36/39 | ADC1_CH7/0/1 | work, but no pull-ups; 36/39 slightly noisier |
-| never              | GPIO 0,2,4,12–15,25–27 | ADC2 | dead while WiFi is on  |
+**Voltage (ZMPT101B) — GPIO34.** Use an ADC1 pin; ADC2 (GPIO 0, 2, 4, 12–15,
+25–27) is unusable while WiFi is on. GPIO34 is input-only and safe.
+
+If you'd rather skip the ADS1115 and read the CT on the ESP32's SAR ADC
+directly, use **GPIO35** (ADC1_CH7) or **GPIO39** (ADC1_CH3) — both are
+input-only and free. Expect a much coarser result (~1 A noise floor).
+
+| Purpose            | Pin                     | Notes                                    |
+|--------------------|-------------------------|------------------------------------------|
+| **CT signal**      | ADS1115 A0              | via series-cap divider; I2C GPIO21/22    |
+| **Voltage signal** | GPIO34                  | ADC1_CH6, ZMPT101B via divider            |
+| Direct-ADC CT alt. | GPIO35 / GPIO39         | ADC1, input-only, ~1 A noise floor        |
+| avoid              | GPIO 0,2,4,12–15,25–27  | ADC2 — dead while WiFi is on             |
 
 ### Accuracy caveats (and upgrade paths)
 
@@ -166,9 +329,10 @@ input-only, so it can't interfere with boot strapping.
   behind the CT's series-cap divider. Its ~0.25 mV RMS noise floor corresponds
   to ~0.03 A at k=127, so the noise gate sits at 0.05 A — real sub-amp
   resolution, unlike the SAR ADC's ~1.3 A floor.
-- Measurement gives **apparent power** (VA) as V_rms × I_rms, assuming PF ≈ 1.
-  For true power/kWh, add phase-corrected sampling (V and I phase difference)
-  — the ZMPT and CT frontends must then be filtered symmetrically.
+- Real power and PF are computed by phase-aligning the current and voltage
+  channels. A ~5 % phase error remains because the ADS1115 reads A0/A1
+  sequentially (~1.25 ms skew ≈ 22° at 50 Hz): a resistive kettle reads
+  PF ≈ 0.95 instead of ≈1.0. Add a phase-offset trim for true kWh.
 
 ### Safety
 
@@ -182,16 +346,16 @@ burden built in).
 
 ### Calibration constants
 
-- **Current:** `kAmpsPerVolt = 127.0` in `current_sensor.h` — calibrated against
+- **Current:** `kAmpsPerMv = 0.1316` in `power_sampler.h` — calibrated against
   a 2200 W kettle on 220 V mains through the final frontend (series-cap tip
-  line + 300 Hz digital low-pass): kettle displays 10.0–10.5 A against a
-  nameplate 10.0 A. Residual accuracy ±3 %, dominated by element/mains
-  tolerance (kettle power scales with V², and mains voltage drifts a few
-  percent) — refine against a utility meter over a day or a plug-in power
-  meter for better. If you fit the optional 100 nF at the CT node, trim to
-  ≈125.5.
-- **Voltage:** `kVoltsPerMv = 0.691` in `voltage_sensor.h` — calibrated against
-  a multimeter: 219 V ↔ ~317 mV RMS at the node. Re-derive whenever the
+  line + 300 Hz digital low-pass): kettle displays ≈9.9 A against a 10 A
+  nameplate. Residual accuracy ±3 %, dominated by element/mains tolerance
+  (kettle power scales with V², and mains voltage drifts a few percent) —
+  refine against a utility meter over a day or a plug-in power meter for
+  better. If you fit the optional 100 nF at the CT node, trim the constant
+  down by the resulting attenuation ratio.
+- **Voltage:** `kVoltsPerMv = 0.688` in `power_sampler.h` — calibrated against
+  a multimeter: 220 V ↔ ~320 mV RMS at the node. Re-derive whenever the
   divider, coupling cap or ZMPT pot changes.
 
 Noise gates: `kNoiseFloorA = 0.05` on the ADS1115 current channel (its
@@ -205,7 +369,7 @@ resistor: its output is a 0-centred AC waveform **DC-biased at VCC/2**
 is 5 V only. Its primary terminals go across mains L/N (safety rules as in
 the CT section apply).
 
-Feed the ADS1115 `A1` like this — the divider provides the DC bias from the
+Feed GPIO34 like this — the divider provides the DC bias from the
 3V3 rail, and the coupling cap blocks the ZMPT's own 2.5 V DC so only the AC
 rides on the divider bias:
 
@@ -213,7 +377,7 @@ rides on the divider bias:
 ZMPT101B VCC  ── VIN (5 V)
 ZMPT101B GND  ── GND
 ZMPT101B OUT ──[10 µF, + toward OUT]──┐
-                                       ●── A1 (ADS1115)
+                                       ●── GPIO34 (ADC1_CH6)
 3V3 ──[10k]──┬──[10k]── GND           │
              └───────────┘  (node = 1.65 V)
 ```
@@ -224,7 +388,7 @@ ZMPT101B OUT ──[10 µF, + toward OUT]──┐
   **+ lead faces the ZMPT OUT**. Backwards it degrades/leaks.
 - **100 nF ceramic** node→GND optional, for RF junk (matters more with the
   ADS1115 than the SAR ADC).
-- Sanity check with no mains on the ZMPT primary: `A1 bias ≈ 1650 mV`, flat.
+- Sanity check with no mains on the ZMPT primary: `GPIO34 bias ≈ 1650 mV`, flat.
   With mains connected, the waveform should swing symmetrically about it; if
   the positive peak approaches 3.3 V, trim the module's onboard pot down.
 
@@ -240,7 +404,8 @@ end state**.
 Firmware joins WiFi, serves JSON on `http://<ip>/metrics`:
 
 ```json
-{"current_a": 4.21, "power_va": 926.2, "voltage": 220.0, "uptime_s": 1203}
+{"current_a": 4.21, "voltage_v": 220.0, "power_va": 926.2, "power_w": 910.0,
+ "pf": 0.982, "energy_kwh": 1.2345, "mains_hz": 50.0, "uptime_s": 1203}
 ```
 
 HA can poll it with a `restful` sensor. Great for `curl` during development
@@ -273,11 +438,16 @@ native HA auto-discovery.
 
 ## Roadmap
 
-1. **[done]** Blink + serial hello
+1. **[done]** Blink + serial hello (`hello_blink/`)
 2. **[done]** WiFi connect + `/metrics` HTTP endpoint
-3. **[done]** CT frontend on GPIO34 — series-coupled divider verified,
-   RMS sampling, kettle-calibrated to ±15 %, noise gate at 2 A
-4. **[done on test broker]** MQTT + HA discovery — repoint secrets.h at the
+3. **[done]** CT frontend on ADS1115 A0 — series-coupled divider, RMS sampling,
+   noise gate at 0.05 A (calibrate against a kettle once the clamp is fitted)
+4. **[done]** ZMPT101B voltage on GPIO34 — whole-cycle RMS, mains frequency,
+   concurrent V+I sampling for true power and PF
+5. **[done on test broker]** MQTT + HA discovery — repoint secrets.h at the
    HA broker when Mosquitto is installed there
-5. OTA firmware updates, calibration constant in NVS
-6. Optional: ZMPT101B voltage sensing (true power), multi-CT circuits
+6. Fit the CT clamp around a single mains conductor and calibrate
+   `kAmpsPerMv` against a known load (kettle) or the utility meter
+7. **[done]** OTA firmware updates via HTTP `/update` (trusted LAN, no auth yet)
+8. Calibration constants in NVS
+9. Optional: multi-CT circuits

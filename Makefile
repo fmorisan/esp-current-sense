@@ -10,10 +10,27 @@ BAUD      ?= 115200
 SKETCH    := firmware
 BUILD_DIR := .build
 
-.PHONY: build upload monitor dev clean
+.PHONY: build test scope metrics test-scope upload monitor dev clean
 
 build:
 	arduino-cli compile --fqbn $(FQBN) --build-path $(BUILD_DIR) $(SKETCH)
+
+test:
+	mkdir -p $(BUILD_DIR)/tests
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -pedantic tests/adc_samples_test.cpp -o $(BUILD_DIR)/tests/adc_samples_test
+	$(BUILD_DIR)/tests/adc_samples_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -pedantic -Itests/host tests/power_sampler_test.cpp -o $(BUILD_DIR)/tests/power_sampler_test
+	$(BUILD_DIR)/tests/power_sampler_test
+
+scope:
+	python3 tools/serve_scope.py
+
+metrics:
+	python3 tools/serve_scope.py --metrics
+
+test-scope:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_scope.py'
+	node --test tests/scope_test.mjs tests/metrics_test.mjs
 
 upload: build
 	arduino-cli upload --fqbn $(FQBN) --port $(PORT) --input-dir $(BUILD_DIR) $(SKETCH)
